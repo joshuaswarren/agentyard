@@ -1,0 +1,11 @@
+version: "3.8"
+services:
+  context7:
+    image: ghcr.io/upstash/context7:latest
+    container_name: context7
+    ports: ["7777:7777"]
+    volumes:
+      - ./data:/data                # where docs land
+    environment:
+      - C7_PORT=7777
+      - C7_ALLOW_ORIGINS=*
