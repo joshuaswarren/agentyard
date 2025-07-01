@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
-# mkworktree <project> <branch> [slug]
-# Creates a git worktree, generates a tmuxp profile, and starts the session detached.
-
+#
+# mkworktree  –  spin up an isolated git work‑tree + tmux session
+#
+# Usage:  mkworktree <project> <branch|commit> [slug]
+#   project   top‑level repo folder under  $HOME/work
+#   branch    branch (or commit SHA) to check out in the work‑tree
+#   slug      optional numeric or text identifier; auto‑numbered if omitted
+#
+# The script:
+#   • creates   ~/work/<project>-wt/<slug>/   via `git worktree add`
+#   • writes    ~/agentyard/tmuxp/private/<project>-<slug>.yaml
+#   • starts    tmuxp load -d <that file>
+#   • ensures   ~/agentyard/bin/jump-<project>  (sesh+fzf picker) exists
+#
+# Dependencies: git 2.5+, tmuxp, sesh, fzf
+# PATH must include  ~/agentyard/bin
+#
 set -euo pipefail
 
 prog=$(basename "$0")
@@ -9,81 +23,96 @@ prog=$(basename "$0")
 usage() {
   cat <<EOF
 Usage: $prog <project> <branch> [slug]
-  project   name of your repo directory under \$HOME/work
-  branch    branch to check out (will track origin/<branch>)
-  slug      optional numeric ID (auto-numbered if missing)
 
-Flags:
-  -h, --help  show this message and exit
+  project  repo folder under \$HOME/work
+  branch   branch or commit checked out into the work-tree
+  slug     optional identifier (auto-numbered if omitted)
+
+Examples
+  $prog deckard codex/cleanup          # auto slug 001 → session deckard-001
+  $prog deckard hotfix/login-bug 007   # explicit slug → session deckard-007
 EOF
 }
 
-# help or missing args
-if [[ $# -lt 2 ]] || [[ ${1:-} =~ ^(-h|--help)$ ]]; then
-  usage
-  exit 1
+# ---- handle flags / mis‑use -------------------------------------------------
+if [[ ${1:-} = "-h" || ${1:-} = "--help" || $# -lt 2 ]]; then
+  usage; exit 1
 fi
 
-project=$1
-branch=$2
-slug=${3:-}
+project=$1                  # deckard
+branch=$2                   # codex/cleanup
+slug=${3:-}                 # 001  (filled later if empty)
 
+# ---- config paths -----------------------------------------------------------
 HOME_WORK="$HOME/work"
-main="$HOME_WORK/$project"
-wt_root="$HOME_WORK/${project}-wt"
-cfg_dir="$HOME/agentyard/tmuxp/private"
-cfg="$cfg_dir/${project}-${slug:-XXX}.yaml"
+main_repo="$HOME_WORK/$project"           # primary clone with .git/
+wt_root="$HOME_WORK/${project}-wt"        # parent for numbered work‑trees
 
-# check deps
-for cmd in git tmuxp; do
-  if ! command -v "$cmd" &> /dev/null; then
-    echo "Error: '$cmd' is not installed or not in \$PATH." >&2
-    exit 1
-  fi
+tmuxp_priv="$HOME/agentyard/tmuxp/private"
+cfg_file="$tmuxp_priv/${project}-${slug:-XXX}.yaml"   # placeholder if slug unknown
+
+# ---- sanity checks ----------------------------------------------------------
+for cmd in git tmuxp sesh fzf; do
+  command -v "$cmd" >/dev/null || { echo "Error: $cmd not installed." >&2; exit 1; }
 done
 
-# check project exists & is git repo
-if [[ ! -d "$main/.git" ]]; then
-  echo "Error: project dir '$main' missing or not a git repo." >&2
-  exit 1
-fi
+[[ -d "$main_repo/.git" ]] || { echo "Error: '$main_repo' is not a git repo." >&2; exit 1; }
 
-mkdir -p "$wt_root" "$cfg_dir"
+mkdir -p "$wt_root" "$tmuxp_priv"
 
-# generate numeric slug if missing
-if [[ -z "$slug" ]]; then
-  last=$(for d in "$wt_root"/*; do
-    [[ -d $d ]] && basename "$d"
-  done | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
-
+# ---- auto‑generate numeric slug ---------------------------------------------
+if [[ -z $slug ]]; then
+  last=$(find "$wt_root" -maxdepth 1 -type d \
+           -regex ".*/[0-9][0-9][0-9]" -printf '%f\n' | sort -n | tail -1 || true)
   next=$(( ${last:-0} + 1 ))
   slug=$(printf "%03d" "$next")
 fi
 
-wt="$wt_root/$slug"
-cfg="$cfg_dir/${project}-${slug}.yaml"
+worktree_dir="$wt_root/$slug"
+cfg_file="$tmuxp_priv/${project}-${slug}.yaml"
+session_name="${project}-${slug}"
 
-# fetch & add worktree
-git -C "$main" fetch -q origin
-git -C "$main" worktree add -B "$branch" "$wt" "origin/$branch" \
+# ---- create the work‑tree ---------------------------------------------------
+git -C "$main_repo" fetch -q origin
+git -C "$main_repo" worktree add -B "$branch" "$worktree_dir" "origin/$branch" \
   || { echo "Error: git worktree add failed." >&2; exit 1; }
 
-# write tmuxp config
-cat > "$cfg" <<YAML
-session_name: ${project}-${slug}
-start_directory: $wt
+# ---- write tmuxp config -----------------------------------------------------
+cat > "$cfg_file" <<YAML
+session_name: $session_name
+start_directory: $worktree_dir
 windows:
-  - window_name: ${project}
+  - window_name: $project
     panes:
       - shell_command:
-          - exec \$SHELL -l  # login shell
+          - exec \$SHELL -l            # open a login shell in the work‑tree
 YAML
 
-# launch detached
-if ! tmuxp load -d "$cfg"; then
-  echo "Error: tmuxp failed to load config $cfg." >&2
-  exit 1
+# ---- launch tmux session (detached) -----------------------------------------
+tmuxp load -d "$cfg_file" || { echo "Error: tmuxp failed." >&2; exit 1; }
+
+# ---- create a fuzzy picker helper (jump-<project>) --------------------------
+helper="$HOME/agentyard/bin/jump-$project"
+
+if [[ ! -f $helper ]]; then
+  cat > "$helper" <<'BASH'
+#!/usr/bin/env bash
+# Auto‑generated by mkworktree : fuzzy‑pick any session for this project
+set -euo pipefail
+slug=$(basename "$0" | cut -d'-' -f2-)   # "deckard" from "jump-deckard"
+exec sesh connect "$(sesh list | grep "$slug" | fzf)"
+BASH
+  chmod +x "$helper"
 fi
 
-echo "Worktree ready: $wt"
-echo "To enter: ssh (your-dev-host) && tmux attach -t ${project}-${slug}"
+# ---- success message --------------------------------------------------------
+cat <<EOF
+✔ Work‑tree created: $worktree_dir
+✔ tmux session     : $session_name  (detached)
+
+To attach now:
+  ssh <host> && tmux attach -t $session_name
+or use:
+  jump-$project     # fuzzy picker for any '$project' sessions
+EOF
+

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# sesh-pick <slug> – fuzzy‑find a tmux session containing <slug>
+set -euo pipefail
+[[ $# -gt 0 ]] || { echo "Usage: sesh-pick <slug>" >&2; exit 1; }
+exec sesh connect "$(sesh list | grep "$1" | fzf)"
