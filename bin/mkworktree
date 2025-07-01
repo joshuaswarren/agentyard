@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# mkworktree <project> <branch> [slug]
+# Creates a git worktree, generates a tmuxp profile, and starts the session detached.
+
+set -euo pipefail
+
+prog=$(basename "$0")
+
+usage() {
+  cat <<EOF
+Usage: $prog <project> <branch> [slug]
+  project   name of your repo directory under \$HOME/work
+  branch    branch to check out (will track origin/<branch>)
+  slug      optional numeric ID (auto-numbered if missing)
+
+Flags:
+  -h, --help  show this message and exit
+EOF
+}
+
+# help or missing args
+if [[ $# -lt 2 ]] || [[ ${1:-} =~ ^(-h|--help)$ ]]; then
+  usage
+  exit 1
+fi
+
+project=$1
+branch=$2
+slug=${3:-}
+
+HOME_WORK="$HOME/work"
+main="$HOME_WORK/$project"
+wt_root="$HOME_WORK/${project}-wt"
+cfg_dir="$HOME/agentyard/tmuxp/private"
+cfg="$cfg_dir/${project}-${slug:-XXX}.yaml"
+
+# check deps
+for cmd in git tmuxp; do
+  if ! command -v "$cmd" &> /dev/null; then
+    echo "Error: '$cmd' is not installed or not in \$PATH." >&2
+    exit 1
+  fi
+done
+
+# check project exists & is git repo
+if [[ ! -d "$main/.git" ]]; then
+  echo "Error: project dir '$main' missing or not a git repo." >&2
+  exit 1
+fi
+
+mkdir -p "$wt_root" "$cfg_dir"
+
+# generate numeric slug if missing
+if [[ -z "$slug" ]]; then
+  last=$(for d in "$wt_root"/*; do
+    [[ -d $d ]] && basename "$d"
+  done | grep -E '^[0-9]+$' | sort -n | tail -1 || true)
+
+  next=$(( ${last:-0} + 1 ))
+  slug=$(printf "%03d" "$next")
+fi
+
+wt="$wt_root/$slug"
+cfg="$cfg_dir/${project}-${slug}.yaml"
+
+# fetch & add worktree
+git -C "$main" fetch -q origin
+git -C "$main" worktree add -B "$branch" "$wt" "origin/$branch" \
+  || { echo "Error: git worktree add failed." >&2; exit 1; }
+
+# write tmuxp config
+cat > "$cfg" <<YAML
+session_name: ${project}-${slug}
+start_directory: $wt
+windows:
+  - window_name: ${project}
+    panes:
+      - shell_command:
+          - exec \$SHELL -l  # login shell
+YAML
+
+# launch detached
+if ! tmuxp load -d "$cfg"; then
+  echo "Error: tmuxp failed to load config $cfg." >&2
+  exit 1
+fi
+
+echo "Worktree ready: $wt"
+echo "To enter: ssh (your-dev-host) && tmux attach -t ${project}-${slug}"
