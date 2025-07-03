@@ -1,0 +1,195 @@
+{
+  "url": "https://www.carltonusa.com",
+  "analyzedAt": "2025-07-03T00:50:00Z",
+  "platform": {
+    "detected": "Custom ASP.NET",
+    "version": "Unknown",
+    "confidence": "high"
+  },
+  "pages": {
+    "homepage": {
+      "url": "https://www.carltonusa.com",
+      "loadTime": null,
+      "issues": [
+        "Non-composited animations detected",
+        "Legacy JavaScript served to modern browsers",
+        "High cumulative layout shift"
+      ],
+      "features": [
+        "Product carousel/slider",
+        "Featured products section",
+        "Top categories",
+        "Newsletter signup",
+        "Quick order functionality"
+      ]
+    },
+    "categoryPage": {
+      "url": "https://www.carltonusa.com/Dot-Hazmat-Placards",
+      "features": [
+        "Multi-level category navigation",
+        "Subcategory tiles with images",
+        "Detailed product material descriptions",
+        "Left sidebar navigation with filters"
+      ]
+    },
+    "productListingPage": {
+      "url": "https://www.carltonusa.com/Hazmat-Placards-Class-3",
+      "features": [
+        "Grid/list view toggle",
+        "Sort functionality",
+        "Price range filters",
+        "Material filters",
+        "Load more pagination",
+        "Quick look functionality"
+      ]
+    },
+    "productDetailPage": {
+      "url": "https://www.carltonusa.com/class-3-flammable-liquid-worded-placard/p/807",
+      "features": [
+        "Multiple product images",
+        "Material variant selector",
+        "Price range display",
+        "Add to cart",
+        "Save for later (wishlist)",
+        "Product tabs (Description, Reviews, Specifications)",
+        "Recently viewed items",
+        "Multiple breadcrumb paths"
+      ]
+    },
+    "cartPage": {
+      "url": "https://www.carltonusa.com/cartpage.aspx",
+      "features": [
+        "Empty cart handling",
+        "Recently viewed items",
+        "Continue shopping link",
+        "California Prop 65 warning"
+      ]
+    }
+  },
+  "technical": {
+    "frontend": [
+      "ASP.NET WebForms",
+      "jQuery",
+      "Custom JavaScript"
+    ],
+    "analytics": [],
+    "integrations": [
+      "Google Tag Manager (likely)",
+      "Email marketing platform"
+    ],
+    "fileExtensions": [
+      ".aspx"
+    ],
+    "serverTechnology": "IIS/ASP.NET"
+  },
+  "performance": {
+    "lighthouse": {
+      "performance": 55,
+      "accessibility": 91,
+      "bestPractices": 93,
+      "seo": 92
+    },
+    "coreWebVitals": {
+      "CLS": "Poor",
+      "issues": [
+        "Excessive DOM size",
+        "Document.write() usage",
+        "Large layout shifts",
+        "Legacy JavaScript",
+        "Low resolution images"
+      ]
+    }
+  },
+  "ux": {
+    "responsive": true,
+    "searchType": "basic site search",
+    "customizations": [
+      "Industry-specific categorization (DOT, OSHA compliance)",
+      "Multiple navigation paths to same products",
+      "Custom product configurator (material selection)",
+      "Minimum order quantities",
+      "B2B features (catalog request, quick order)"
+    ]
+  },
+  "content": {
+    "estimatedProducts": "1000-5000",
+    "productTypes": [
+      "DOT Hazmat Placards",
+      "Safety Signs",
+      "Labels & Decals",
+      "Traffic & Parking",
+      "Security Seals",
+      "Compliance Products",
+      "Custom Products",
+      "Tape"
+    ],
+    "hasBlogs": false,
+    "languages": [
+      "en"
+    ],
+    "specialFeatures": [
+      "Virtual catalogs",
+      "Request samples",
+      "Custom product ordering",
+      "Industry compliance focus"
+    ]
+  },
+  "seo": {
+    "urlStructure": "SEO-friendly with category hierarchy",
+    "metaTags": "Present",
+    "schemaMarkup": "Not detected",
+    "sitemapAvailable": true
+  },
+  "businessModel": {
+    "type": "B2B E-commerce",
+    "industry": "Safety & Compliance Products",
+    "targetAudience": "Transportation, Manufacturing, Industrial",
+    "specialRequirements": [
+      "DOT compliance",
+      "OSHA compliance",
+      "Hazmat regulations",
+      "Custom product configuration",
+      "Bulk ordering",
+      "California Prop 65 compliance"
+    ]
+  },
+  "screenshots": [
+    "carltonusa-homepage.png",
+    "carltonusa-category-dot-hazmat.png",
+    "carltonusa-product-detail.png"
+  ],
+  "recommendations": {
+    "migration": [
+      "Modernize from ASP.NET WebForms to Magento 2",
+      "Implement proper product variant management",
+      "Improve performance scores",
+      "Add robust search with Elasticsearch",
+      "Implement proper caching strategy",
+      "Mobile-first responsive design improvements"
+    ],
+    "features": [
+      "Enhanced B2B functionality",
+      "Customer-specific pricing",
+      "Quote management system",
+      "Improved product configurator",
+      "Better bulk ordering interface"
+    ]
+  },
+  "architectureReview": {
+    "reviewedAt": "2025-07-03T00:52:00Z",
+    "readinessScore": 7.8,
+    "recommendedEdition": "Adobe Commerce B2B",
+    "criticalGaps": [
+      "Virtual catalog details",
+      "Sample request workflow",
+      "Custom product complexity",
+      "Integration inventory"
+    ],
+    "additionalAnalysisNeeded": [
+      "Product customization logic",
+      "Pricing structure",
+      "Order volume metrics",
+      "Compliance requirements"
+    ]
+  }
+}
