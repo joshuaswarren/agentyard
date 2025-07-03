@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+#
+# cleanup-worktrees  –  remove merged worktrees and perform maintenance
+#
+# Usage:  cleanup-worktrees [--dry-run] [--all]
+#
+# This command helps maintain a clean workspace by:
+#   • Removing worktrees whose branches are fully merged
+#   • Cleaning up orphaned worktree directories
+#   • Pruning stale worktree references
+#   • Removing associated tmuxp configs and tmux sessions
+#
+# Options:
+#   --dry-run    Show what would be removed without actually removing
+#   --all        Also remove worktrees with unpushed commits (interactive)
+#
+# Run this weekly (e.g., Monday morning) to keep your workspace tidy.
+#
+set -euo pipefail
+
+prog=$(basename "$0")
+
+# ---- Parse arguments --------------------------------------------------------
+DRY_RUN=false
+REMOVE_ALL=false
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --all)
+      REMOVE_ALL=true
+      shift
+      ;;
+    -h|--help)
+      cat <<EOF
+Usage: $prog [--dry-run] [--all]
+
+Remove merged git worktrees and perform cleanup.
+
+Options:
+  --dry-run    Show what would be removed without actually removing
+  --all        Also prompt to remove worktrees with unpushed commits
+
+Examples:
+  $prog              # Remove only fully merged worktrees
+  $prog --dry-run    # Preview what would be removed
+  $prog --all        # Interactive mode for all worktrees
+EOF
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      echo "Use --help for usage information" >&2
+      exit 1
+      ;;
+  esac
+done
+
+# ---- Helper functions -------------------------------------------------------
+log_action() {
+  local action="$1"
+  local target="$2"
+  local status="${3:-}"
+  
+  if [[ "$DRY_RUN" == true ]]; then
+    echo "[DRY RUN] Would $action: $target $status"
+  else
+    echo "✓ ${action}: $target $status"
+  fi
+}
+
+log_skip() {
+  local reason="$1"
+  local target="$2"
+  echo "⏭️  Skipping $target: $reason"
+}
+
+log_error() {
+  echo "❌ Error: $1" >&2
+}
+
+# Check if a branch is fully merged
+is_branch_merged() {
+  local repo="$1"
+  local branch="$2"
+  
+  # Check against common base branches
+  for base in main master develop; do
+    if git -C "$repo" show-ref --verify --quiet "refs/remotes/origin/$base"; then
+      if git -C "$repo" merge-base --is-ancestor "$branch" "origin/$base" 2>/dev/null; then
+        return 0
+      fi
+    fi
+  done
+  
+  return 1
+}
+
+# Get tmux session name for a worktree
+get_session_name() {
+  local project="$1"
+  local slug="$2"
+  echo "${project}-${slug}"
+}
+
+# Kill tmux session if it exists
+kill_tmux_session() {
+  local session="$1"
+  if tmux has-session -t "$session" 2>/dev/null; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_action "kill tmux session" "$session"
+    else
+      tmux kill-session -t "$session" 2>/dev/null || true
+      log_action "Killed tmux session" "$session"
+    fi
+  fi
+}
+
+# Remove tmuxp config if it exists
+remove_tmuxp_config() {
+  local project="$1"
+  local slug="$2"
+  local config="$HOME/agentyard/tmuxp/private/${project}-${slug}.yaml"
+  
+  if [[ -f "$config" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_action "remove tmuxp config" "$config"
+    else
+      rm -f "$config"
+      log_action "Removed tmuxp config" "$config"
+    fi
+  fi
+}
+
+# ---- Main cleanup logic -----------------------------------------------------
+echo "🧹 Cleaning up git worktrees..."
+echo
+
+# Track statistics
+removed_count=0
+skipped_count=0
+error_count=0
+
+# Find all worktree directories
+for project_wt in "$HOME/work"/*-wt; do
+  # Skip if not a directory
+  [[ -d "$project_wt" ]] || continue
+  
+  # Extract project name
+  project_name=$(basename "$project_wt" | sed 's/-wt$//')
+  main_repo="$HOME/work/$project_name"
+  
+  # Skip if main repo doesn't exist
+  if [[ ! -d "$main_repo/.git" ]]; then
+    log_skip "main repo not found" "$project_wt"
+    ((skipped_count++))
+    continue
+  fi
+  
+  # First, prune any stale worktree entries
+  if [[ "$DRY_RUN" == false ]]; then
+    git -C "$main_repo" worktree prune 2>/dev/null || true
+  fi
+  
+  # Check each numbered worktree
+  for worktree_dir in "$project_wt"/[0-9][0-9][0-9]; do
+    # Skip if not a directory
+    [[ -d "$worktree_dir" ]] || continue
+    
+    slug=$(basename "$worktree_dir")
+    
+    # Check if it's actually a git worktree
+    if [[ ! -d "$worktree_dir/.git" ]]; then
+      log_skip "not a git directory" "$worktree_dir"
+      ((skipped_count++))
+      continue
+    fi
+    
+    # Get branch name
+    if ! branch=$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD 2>/dev/null); then
+      log_error "Cannot determine branch for $worktree_dir"
+      ((error_count++))
+      continue
+    fi
+    
+    # Check for uncommitted changes
+    if ! git -C "$worktree_dir" diff --quiet || ! git -C "$worktree_dir" diff --cached --quiet; then
+      log_skip "has uncommitted changes" "$worktree_dir (branch: $branch)"
+      ((skipped_count++))
+      continue
+    fi
+    
+    # Check if branch is merged
+    merged=false
+    if is_branch_merged "$main_repo" "$branch"; then
+      merged=true
+    fi
+    
+    # Determine if we should remove this worktree
+    should_remove=false
+    
+    if [[ "$merged" == true ]]; then
+      should_remove=true
+      merge_status="(merged)"
+    elif [[ "$REMOVE_ALL" == true ]]; then
+      # Check for unpushed commits
+      unpushed_count=0
+      if git -C "$worktree_dir" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+        unpushed_count=$(git -C "$worktree_dir" rev-list --count "origin/$branch..$branch" 2>/dev/null || echo "0")
+      else
+        # Branch doesn't exist on remote
+        unpushed_count=$(git -C "$worktree_dir" rev-list --count HEAD 2>/dev/null || echo "0")
+      fi
+      
+      if [[ "$unpushed_count" -gt 0 ]]; then
+        merge_status="($unpushed_count unpushed commits)"
+      else
+        merge_status="(unmerged)"
+      fi
+      
+      # Interactive prompt
+      echo
+      echo "Found unmerged worktree: $worktree_dir"
+      echo "  Branch: $branch $merge_status"
+      read -p "  Remove? (y/N) " -n 1 -r
+      echo
+      if [[ $REPLY =~ ^[Yy]$ ]]; then
+        should_remove=true
+      fi
+    fi
+    
+    if [[ "$should_remove" == true ]]; then
+      session_name=$(get_session_name "$project_name" "$slug")
+      
+      if [[ "$DRY_RUN" == true ]]; then
+        log_action "remove worktree" "$worktree_dir" "$merge_status"
+        kill_tmux_session "$session_name"
+        remove_tmuxp_config "$project_name" "$slug"
+      else
+        # Remove the worktree
+        if git -C "$main_repo" worktree remove "$worktree_dir" --force 2>/dev/null; then
+          log_action "Removed worktree" "$worktree_dir" "$merge_status"
+          ((removed_count++))
+          
+          # Clean up associated resources
+          kill_tmux_session "$session_name"
+          remove_tmuxp_config "$project_name" "$slug"
+        else
+          log_error "Failed to remove worktree $worktree_dir"
+          ((error_count++))
+        fi
+      fi
+    else
+      log_skip "not merged" "$worktree_dir (branch: $branch)"
+      ((skipped_count++))
+    fi
+  done
+done
+
+# ---- Summary ----------------------------------------------------------------
+echo
+echo "📊 Cleanup summary:"
+echo "   Removed: $removed_count worktrees"
+echo "   Skipped: $skipped_count worktrees"
+if [[ "$error_count" -gt 0 ]]; then
+  echo "   Errors: $error_count worktrees"
+fi
+
+if [[ "$DRY_RUN" == true ]]; then
+  echo
+  echo "This was a dry run. No changes were made."
+  echo "Run without --dry-run to perform the cleanup."
+fi
+
+# ---- Maintenance tasks ------------------------------------------------------
+if [[ "$DRY_RUN" == false && "$removed_count" -gt 0 ]]; then
+  echo
+  echo "🔧 Running maintenance tasks..."
+  
+  # Run git gc on main repos that had worktrees removed
+  for project_wt in "$HOME/work"/*-wt; do
+    [[ -d "$project_wt" ]] || continue
+    project_name=$(basename "$project_wt" | sed 's/-wt$//')
+    main_repo="$HOME/work/$project_name"
+    
+    if [[ -d "$main_repo/.git" ]]; then
+      echo "   Running git gc on $project_name..."
+      git -C "$main_repo" gc --auto 2>/dev/null || true
+    fi
+  done
+fi
+
+echo
+echo "✅ Cleanup complete!"

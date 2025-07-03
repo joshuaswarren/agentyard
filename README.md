@@ -28,6 +28,7 @@ Add the lines above to ~/.zshrc (or ~/.bashrc), source the file, and you’re re
 starttask yourproject feature/new-feature   # create disposable worktree & session
 jump-yourproject                            # fuzzy‑select a session
 finishtask                                  # clean up worktree when done (run inside session)
+cleanup-worktrees                           # weekly cleanup of merged worktrees
 
 ### Using Claude Code Hooks to Send Ntfy.sh Notifications
 Prerequisites
