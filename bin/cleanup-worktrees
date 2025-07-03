@@ -173,7 +173,7 @@ for project_wt in "$HOME/work"/*-wt; do
     slug=$(basename "$worktree_dir")
     
     # Check if it's actually a git worktree
-    if [[ ! -d "$worktree_dir/.git" ]]; then
+    if [[ ! -e "$worktree_dir/.git" ]]; then
       log_skip "not a git directory" "$worktree_dir"
       ((skipped_count++))
       continue
