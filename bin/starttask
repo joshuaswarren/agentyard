@@ -70,7 +70,7 @@ mkdir -p "$wt_root" "$tmuxp_priv"
 if [[ -z $slug ]]; then
   last=$(find "$wt_root" -maxdepth 1 -type d \
            -regex ".*/[0-9][0-9][0-9]" | xargs -I {} basename {} | sort -n | tail -1 || true)
-  next=$(( ${last:-0} + 1 ))
+  next=$(( 10#${last:-0} + 1 ))
   slug=$(printf "%03d" "$next")
 fi
 
