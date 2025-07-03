@@ -14,13 +14,18 @@ Agentyard is a lightweight toolbelt for managing multiple AI coding sessions usi
 
 ### Creating Work Sessions
 ```bash
-# Create a new git worktree + tmux session
-mkworktree <project> <branch> [slug]
+# Create a new disposable git worktree + tmux session
+starttask <project> <branch> [slug]
 
 # Examples:
-mkworktree deckard codex/cleanup          # Creates deckard-001 (auto-numbered)
-mkworktree deckard hotfix/login-bug 007   # Creates deckard-007 (explicit slug)
+starttask deckard feature/cleanup          # Creates deckard-001 (auto-numbered)
+starttask deckard bugfix/login-issue 007   # Creates deckard-007 (explicit slug)
+
+# Clean up when task is complete (run inside the tmux session)
+finishtask
 ```
+
+Each worktree is single-branch and disposable. The `starttask` command always creates a fresh branch from origin/main using `git switch -c`, avoiding checkout conflicts.
 
 ### Session Management
 ```bash
@@ -57,18 +62,28 @@ cd mcp && ./start-docker.sh
 
 ### Key Components
 
-1. **mkworktree** (`bin/mkworktree`)
+1. **starttask** (`bin/starttask`)
    - Creates numbered git worktrees under `~/work/<project>-wt/<slug>/`
+   - Always creates fresh branch from origin/main using `git switch -c`
    - Generates tmuxp configuration in `~/agentyard/tmuxp/private/`
    - Launches detached tmux session
    - Auto-creates `jump-<project>` helper on first use
+   - Each worktree is disposable - one branch per worktree
 
-2. **Session Helpers**
+2. **finishtask** (`bin/finishtask`)
+   - Run from inside a tmux session created by starttask
+   - Checks for uncommitted changes (safety)
+   - Removes the git worktree
+   - Deletes the worktree directory
+   - Removes tmuxp config file
+   - Kills the tmux session
+
+3. **Session Helpers**
    - `sesh-pick`: Fuzzy finder for tmux sessions
    - `jump-<project>`: Project-specific session picker (auto-generated)
    - Depends on: sesh, fzf, tmux
 
-3. **Claude Integration**
+4. **Claude Integration**
    - Command templates in `claude-commands/` directories
    - MCP server support via Docker
    - Commands are symlinked to `~/.claude/commands/`
@@ -90,12 +105,13 @@ cd mcp && ./start-docker.sh
 
 ## Working with Git Worktrees
 
-Worktrees are created with:
-```bash
-git worktree add -B <branch> <path> origin/<branch>
-```
+The `starttask` command creates disposable worktrees following these principles:
+- One worktree = one branch = one task
+- Always creates fresh branches from origin/main using `git switch -c`
+- Never reuses worktrees after the task is complete
+- Use `finishtask` to clean up when done
 
-This allows multiple branches to be checked out simultaneously without stashing/switching.
+This approach prevents git index corruption and ensures clean starting points for each task.
 
 ## Dependencies
 

@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+#
+# starttask  –  create disposable git worktree + tmux session for a single task
+#
+# Usage:  starttask <project> <branch> [slug]
+#   project   top‑level repo folder under  $HOME/work
+#   branch    branch name for the task (created fresh from origin/main)
+#   slug      optional numeric or text identifier; auto‑numbered if omitted
+#
+# The script:
+#   • creates   ~/work/<project>-wt/<slug>/   via `git worktree add`
+#   • always creates a fresh branch from origin/main using `git switch -c`
+#   • writes    ~/agentyard/tmuxp/private/<project>-<slug>.yaml
+#   • starts    tmuxp load -d <that file>
+#   • ensures   ~/agentyard/bin/jump-<project>  (sesh+fzf picker) exists
+#
+# IMPORTANT: Each worktree is disposable - one branch per worktree.
+# Use `finishtask` to clean up when done.
+#
+# Dependencies: git 2.5+, tmuxp, sesh, fzf
+# PATH must include  ~/agentyard/bin
+#
+set -euo pipefail
+
+prog=$(basename "$0")
+
+usage() {
+  cat <<EOF
+Usage: $prog <project> <branch> [slug]
+
+  project  repo folder under \$HOME/work
+  branch   branch name for the task (created fresh from origin/main)
+  slug     optional identifier (auto-numbered if omitted)
+
+Examples
+  $prog deckard feature/new-ui          # auto slug 001 → session deckard-001
+  $prog deckard bugfix/login-issue 007  # explicit slug → session deckard-007
+
+Note: Each worktree is single-branch and disposable. Use finishtask to clean up.
+EOF
+}
+
+# ---- handle flags / mis‑use -------------------------------------------------
+if [[ ${1:-} = "-h" || ${1:-} = "--help" || $# -lt 2 ]]; then
+  usage; exit 1
+fi
+
+project=$1                  # deckard
+branch=$2                   # feature/new-ui
+slug=${3:-}                 # 001  (filled later if empty)
+
+# ---- config paths -----------------------------------------------------------
+HOME_WORK="$HOME/work"
+main_repo="$HOME_WORK/$project"           # primary clone with .git/
+wt_root="$HOME_WORK/${project}-wt"        # parent for numbered work‑trees
+
+tmuxp_priv="$HOME/agentyard/tmuxp/private"
+cfg_file="$tmuxp_priv/${project}-${slug:-XXX}.yaml"   # placeholder if slug unknown
+
+# ---- sanity checks ----------------------------------------------------------
+for cmd in git tmuxp sesh fzf; do
+  command -v "$cmd" >/dev/null || { echo "Error: $cmd not installed." >&2; exit 1; }
+done
+
+[[ -d "$main_repo/.git" ]] || { echo "Error: '$main_repo' is not a git repo." >&2; exit 1; }
+
+mkdir -p "$wt_root" "$tmuxp_priv"
+
+# ---- auto‑generate numeric slug ---------------------------------------------
+if [[ -z $slug ]]; then
+  last=$(find "$wt_root" -maxdepth 1 -type d \
+           -regex ".*/[0-9][0-9][0-9]" | xargs -I {} basename {} | sort -n | tail -1 || true)
+  next=$(( ${last:-0} + 1 ))
+  slug=$(printf "%03d" "$next")
+fi
+
+worktree_dir="$wt_root/$slug"
+cfg_file="$tmuxp_priv/${project}-${slug}.yaml"
+session_name="${project}-${slug}"
+
+# ---- check for branch naming conflicts --------------------------------------
+# Check if branch name would conflict with existing branches
+if [[ "$branch" == *"/"* ]]; then
+  # Extract parent path (e.g., "crewai" from "crewai/implementation")
+  parent_branch="${branch%%/*}"
+  
+  # Check if parent exists as a branch
+  if git -C "$main_repo" show-ref --verify --quiet "refs/heads/$parent_branch" || \
+     git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/$parent_branch"; then
+    echo "Error: Cannot create branch '$branch' because branch '$parent_branch' already exists." >&2
+    echo "Git doesn't allow creating 'path/like' branches when 'path' exists as a branch." >&2
+    echo "Consider using a different naming scheme, e.g., '${parent_branch}-${branch#*/}'" >&2
+    exit 1
+  fi
+fi
+
+# ---- create the work‑tree ---------------------------------------------------
+# Fetch all updates from origin
+git -C "$main_repo" fetch -q --all --prune
+
+# Determine the base branch (main or master)
+if git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/main"; then
+  base_branch="origin/main"
+elif git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/master"; then
+  base_branch="origin/master"
+else
+  echo "Error: No origin/main or origin/master branch found." >&2
+  exit 1
+fi
+
+# Create worktree in detached HEAD state first
+git -C "$main_repo" worktree add --detach "$worktree_dir" \
+  || { echo "Error: git worktree add failed." >&2; exit 1; }
+
+# Now create and switch to the new branch from the base branch
+# This avoids any issues with checking out main/master
+git -C "$worktree_dir" switch -c "$branch" "$base_branch" \
+  || { echo "Error: git switch -c failed." >&2; exit 1; }
+
+# ---- write tmuxp config -----------------------------------------------------
+cat > "$cfg_file" <<YAML
+session_name: $session_name
+start_directory: $worktree_dir
+windows:
+  - window_name: $project
+    panes:
+      - shell_command:
+          - exec \$SHELL -l            # open a login shell in the work‑tree
+YAML
+
+# ---- launch tmux session (detached) -----------------------------------------
+tmuxp load -d "$cfg_file" || { echo "Error: tmuxp failed." >&2; exit 1; }
+
+# ---- create a fuzzy picker helper (jump-<project>) --------------------------
+helper="$HOME/agentyard/bin/jump-$project"
+
+if [[ ! -f $helper ]]; then
+  cat > "$helper" <<'BASH'
+#!/usr/bin/env bash
+# Auto‑generated by starttask : fuzzy‑pick any session for this project
+set -euo pipefail
+slug=$(basename "$0" | cut -d'-' -f2-)   # "deckard" from "jump-deckard"
+exec sesh connect "$(sesh list | grep "$slug" | fzf)"
+BASH
+  chmod +x "$helper"
+fi
+
+# ---- success message --------------------------------------------------------
+cat <<EOF
+✔ Disposable worktree created: $worktree_dir
+✔ Fresh branch: $branch (from $base_branch)
+✔ tmux session: $session_name (detached)
+
+To start working:
+  tmux attach -t $session_name
+or use:
+  jump-$project     # fuzzy picker for any '$project' sessions
+
+When done with this task:
+  finishtask        # (run inside the tmux session)
+EOF
