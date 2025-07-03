@@ -63,7 +63,7 @@ mkdir -p "$wt_root" "$tmuxp_priv"
 # ---- auto‑generate numeric slug ---------------------------------------------
 if [[ -z $slug ]]; then
   last=$(find "$wt_root" -maxdepth 1 -type d \
-           -regex ".*/[0-9][0-9][0-9]" -printf '%f\n' | sort -n | tail -1 || true)
+           -regex ".*/[0-9][0-9][0-9]" | xargs -I {} basename {} | sort -n | tail -1 || true)
   next=$(( ${last:-0} + 1 ))
   slug=$(printf "%03d" "$next")
 fi
@@ -74,8 +74,17 @@ session_name="${project}-${slug}"
 
 # ---- create the work‑tree ---------------------------------------------------
 git -C "$main_repo" fetch -q origin
-git -C "$main_repo" worktree add -B "$branch" "$worktree_dir" "origin/$branch" \
-  || { echo "Error: git worktree add failed." >&2; exit 1; }
+
+# Check if remote branch exists
+if git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+  # Remote branch exists, use it
+  git -C "$main_repo" worktree add -B "$branch" "$worktree_dir" "origin/$branch" \
+    || { echo "Error: git worktree add failed." >&2; exit 1; }
+else
+  # Remote branch doesn't exist, create new branch from HEAD
+  git -C "$main_repo" worktree add -b "$branch" "$worktree_dir" \
+    || { echo "Error: git worktree add failed." >&2; exit 1; }
+fi
 
 # ---- write tmuxp config -----------------------------------------------------
 cat > "$cfg_file" <<YAML
