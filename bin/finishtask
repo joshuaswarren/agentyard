@@ -94,19 +94,8 @@ if [[ -f "$tmuxp_config" ]]; then
   rm -f "$tmuxp_config"
 fi
 
-# ---- Kill tmux session ------------------------------------------------------
-echo "Cleaning up tmux session..."
-# We need to detach first if we're inside the session we're killing
-if [[ "$(tmux display-message -p '#S')" == "$session_name" ]]; then
-  # Kill the session and detach in one go
-  tmux kill-session -t "$session_name"
-else
-  # We're in a different session, just kill it
-  tmux kill-session -t "$session_name"
-fi
-
 # ---- Success message --------------------------------------------------------
-# This will only show if we were attached to a different session
+# Show success message before killing the session
 cat <<EOF
 ✔ Task cleanup complete!
   - Branch: $current_branch ($commit_count commits)
@@ -118,3 +107,20 @@ Remember to:
   - Create a PR if ready for review
   - Delete the remote branch after merge
 EOF
+
+# ---- Kill tmux session ------------------------------------------------------
+echo ""
+echo "Detaching from tmux session..."
+# We need to detach first if we're inside the session we're killing
+if [[ "$(tmux display-message -p '#S')" == "$session_name" ]]; then
+  # Small delay to ensure message is visible
+  sleep 1
+  # Detach from tmux first, then kill the session
+  # This prevents tmux from auto-switching to another session
+  tmux detach-client
+  # Kill the session after detaching (this runs in the parent shell)
+  tmux kill-session -t "$session_name" 2>/dev/null || true
+else
+  # We're in a different session, just kill it
+  tmux kill-session -t "$session_name"
+fi
