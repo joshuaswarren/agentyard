@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#
+# finishtask  –  clean up a disposable worktree and tmux session
+#
+# Usage:  finishtask
+#
+# Run this command from inside a tmux session created by starttask.
+# It will:
+#   • Detect the current worktree directory
+#   • Remove the git worktree (after safety checks)
+#   • Delete the worktree directory
+#   • Remove the tmuxp config file
+#   • Kill the current tmux session
+#
+# Safety: Won't proceed if there are uncommitted changes
+#
+set -euo pipefail
+
+prog=$(basename "$0")
+
+# ---- Detect if we're in a tmux session --------------------------------------
+if [[ -z "${TMUX:-}" ]]; then
+  echo "Error: finishtask must be run from inside a tmux session created by starttask" >&2
+  exit 1
+fi
+
+# ---- Get current session name -----------------------------------------------
+session_name=$(tmux display-message -p '#S')
+
+# ---- Validate session name format -------------------------------------------
+if [[ ! "$session_name" =~ ^[^-]+-[0-9]+$ ]]; then
+  echo "Error: Current session '$session_name' doesn't match expected format (project-slug)" >&2
+  echo "This command only works with sessions created by starttask" >&2
+  exit 1
+fi
+
+# ---- Extract project and slug -----------------------------------------------
+project="${session_name%-*}"
+slug="${session_name##*-}"
+
+# ---- Verify we're in a worktree directory -----------------------------------
+current_dir=$(pwd)
+expected_wt_dir="$HOME/work/${project}-wt/$slug"
+
+# Check if we're in the expected worktree or a subdirectory of it
+if [[ "$current_dir" != "$expected_wt_dir" && "$current_dir" != "$expected_wt_dir"/* ]]; then
+  echo "Error: Not in expected worktree directory" >&2
+  echo "Expected: $expected_wt_dir (or subdirectory)" >&2
+  echo "Current:  $current_dir" >&2
+  exit 1
+fi
+
+# ---- Safety check: uncommitted changes --------------------------------------
+cd "$expected_wt_dir"
+
+# Check for uncommitted changes
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "Error: Uncommitted changes detected!" >&2
+  echo "Please commit or stash your changes before running finishtask" >&2
+  git status --short
+  exit 1
+fi
+
+# Check for untracked files (excluding common ignore patterns)
+untracked=$(git ls-files --others --exclude-standard | head -10)
+if [[ -n "$untracked" ]]; then
+  echo "Warning: Untracked files detected:" >&2
+  echo "$untracked" | sed 's/^/  /' >&2
+  echo "" >&2
+  read -p "Continue anyway? (y/N) " -n 1 -r
+  echo
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 1
+  fi
+fi
+
+# ---- Get branch info for final message --------------------------------------
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+commit_count=$(git rev-list --count "$(git merge-base HEAD origin/main || git merge-base HEAD origin/master)"..HEAD 2>/dev/null || echo "0")
+
+# ---- Remove git worktree ----------------------------------------------------
+echo "Removing git worktree..."
+main_repo="$HOME/work/$project"
+
+# Remove the worktree
+git -C "$main_repo" worktree remove "$expected_wt_dir" --force \
+  || { echo "Error: Failed to remove worktree" >&2; exit 1; }
+
+# ---- Clean up tmuxp config --------------------------------------------------
+tmuxp_config="$HOME/agentyard/tmuxp/private/${project}-${slug}.yaml"
+if [[ -f "$tmuxp_config" ]]; then
+  echo "Removing tmuxp config..."
+  rm -f "$tmuxp_config"
+fi
+
+# ---- Kill tmux session ------------------------------------------------------
+echo "Cleaning up tmux session..."
+# We need to detach first if we're inside the session we're killing
+if [[ "$(tmux display-message -p '#S')" == "$session_name" ]]; then
+  # Kill the session and detach in one go
+  tmux kill-session -t "$session_name"
+else
+  # We're in a different session, just kill it
+  tmux kill-session -t "$session_name"
+fi
+
+# ---- Success message --------------------------------------------------------
+# This will only show if we were attached to a different session
+cat <<EOF
+✔ Task cleanup complete!
+  - Branch: $current_branch ($commit_count commits)
+  - Worktree removed: $expected_wt_dir
+  - Session killed: $session_name
+
+Remember to:
+  - Push your branch if not already pushed
+  - Create a PR if ready for review
+  - Delete the remote branch after merge
+EOF

@@ -25,8 +25,9 @@ eval "$(zoxide init zsh)"
 
 Add the lines above to ~/.zshrc (or ~/.bashrc), source the file, and you’re ready:
 
-mkworktree yourproject your-project   # create new work‑tree
-jump-yourproject                               # fuzzy‑select a session
+starttask yourproject feature/new-feature   # create disposable worktree & session
+jump-yourproject                            # fuzzy‑select a session
+finishtask                                  # clean up worktree when done (run inside session)
 
 ### Using Claude Code Hooks to Send Ntfy.sh Notifications
 Prerequisites
