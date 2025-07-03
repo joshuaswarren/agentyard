@@ -72,18 +72,63 @@ worktree_dir="$wt_root/$slug"
 cfg_file="$tmuxp_priv/${project}-${slug}.yaml"
 session_name="${project}-${slug}"
 
+# ---- check for branch naming conflicts --------------------------------------
+# Check if branch name would conflict with existing branches
+if [[ "$branch" == *"/"* ]]; then
+  # Extract parent path (e.g., "crewai" from "crewai/implementation")
+  parent_branch="${branch%%/*}"
+  
+  # Check if parent exists as a branch
+  if git -C "$main_repo" show-ref --verify --quiet "refs/heads/$parent_branch" || \
+     git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/$parent_branch"; then
+    echo "Error: Cannot create branch '$branch' because branch '$parent_branch' already exists." >&2
+    echo "Git doesn't allow creating 'path/like' branches when 'path' exists as a branch." >&2
+    echo "Consider using a different naming scheme, e.g., '${parent_branch}-${branch#*/}'" >&2
+    exit 1
+  fi
+fi
+
 # ---- create the work‑tree ---------------------------------------------------
-git -C "$main_repo" fetch -q origin
+# Update the main repo first
+current_branch=$(git -C "$main_repo" rev-parse --abbrev-ref HEAD)
+default_branch=""
+
+# Determine the default branch
+if git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/main"; then
+  default_branch="main"
+elif git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/master"; then
+  default_branch="master"
+fi
+
+# Fetch all updates from origin
+git -C "$main_repo" fetch -q --all --prune
+
+# If we're on the default branch, pull the latest changes
+if [[ -n "$default_branch" && "$current_branch" == "$default_branch" ]]; then
+  git -C "$main_repo" pull -q origin "$default_branch"
+fi
 
 # Check if remote branch exists
 if git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
-  # Remote branch exists, use it
-  git -C "$main_repo" worktree add -B "$branch" "$worktree_dir" "origin/$branch" \
+  # Remote branch exists, create worktree and checkout
+  git -C "$main_repo" worktree add "$worktree_dir" \
     || { echo "Error: git worktree add failed." >&2; exit 1; }
+  git -C "$worktree_dir" switch "$branch" \
+    || { echo "Error: git switch to existing branch failed." >&2; exit 1; }
 else
-  # Remote branch doesn't exist, create new branch from HEAD
-  git -C "$main_repo" worktree add -b "$branch" "$worktree_dir" \
+  # Remote branch doesn't exist, create worktree then create new branch from origin/main
+  git -C "$main_repo" worktree add "$worktree_dir" \
     || { echo "Error: git worktree add failed." >&2; exit 1; }
+  # Determine the main branch (could be main or master)
+  if git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/main"; then
+    base_branch="origin/main"
+  elif git -C "$main_repo" show-ref --verify --quiet "refs/remotes/origin/master"; then
+    base_branch="origin/master"
+  else
+    base_branch="HEAD"
+  fi
+  git -C "$worktree_dir" switch -c "$branch" "$base_branch" \
+    || { echo "Error: git switch -c failed." >&2; exit 1; }
 fi
 
 # ---- write tmuxp config -----------------------------------------------------
