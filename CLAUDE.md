@@ -23,6 +23,11 @@ starttask deckard bugfix/login-issue 007   # Creates deckard-007 (explicit slug)
 
 # Clean up when task is complete (run inside the tmux session)
 finishtask
+
+# Weekly cleanup - remove merged worktrees (run on Monday/Friday)
+cleanup-worktrees              # Remove only merged worktrees
+cleanup-worktrees --dry-run    # Preview what would be removed
+cleanup-worktrees --all        # Interactive mode for all worktrees
 ```
 
 Each worktree is single-branch and disposable. The `starttask` command always creates a fresh branch from origin/main using `git switch -c`, avoiding checkout conflicts.
@@ -78,12 +83,20 @@ cd mcp && ./start-docker.sh
    - Removes tmuxp config file
    - Kills the tmux session
 
-3. **Session Helpers**
+3. **cleanup-worktrees** (`bin/cleanup-worktrees`)
+   - Weekly maintenance command for cleaning up old worktrees
+   - Removes worktrees whose branches are fully merged
+   - Cleans up associated tmux sessions and tmuxp configs
+   - `--dry-run` option to preview changes
+   - `--all` option for interactive cleanup of unmerged worktrees
+   - Runs git gc for maintenance after cleanup
+
+4. **Session Helpers**
    - `sesh-pick`: Fuzzy finder for tmux sessions
    - `jump-<project>`: Project-specific session picker (auto-generated)
    - Depends on: sesh, fzf, tmux
 
-4. **Claude Integration**
+5. **Claude Integration**
    - Command templates in `claude-commands/` directories
    - MCP server support via Docker
    - Commands are symlinked to `~/.claude/commands/`
