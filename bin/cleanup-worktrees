@@ -135,6 +135,32 @@ remove_tmuxp_config() {
   fi
 }
 
+# Remove task from active tasks file
+remove_from_active_tasks() {
+  local project="$1"
+  local slug="$2"
+  local session_name="${project}-${slug}"
+  local active_tasks_file="$HOME/agentyard/state/active-tasks.txt"
+  
+  if [[ -f "$active_tasks_file" ]]; then
+    if [[ "$DRY_RUN" == true ]]; then
+      log_action "update active tasks" "remove $session_name"
+    else
+      # Create temp file without the session
+      temp_file=$(mktemp)
+      awk -v session="$session_name" '
+        /^- session_name:/ { 
+          if ($3 == session) { skip=1 } 
+          else { skip=0 }
+        }
+        !skip { print }
+      ' "$active_tasks_file" > "$temp_file"
+      mv "$temp_file" "$active_tasks_file"
+      log_action "Updated active tasks" "removed $session_name"
+    fi
+  fi
+}
+
 # ---- Main cleanup logic -----------------------------------------------------
 echo "🧹 Cleaning up git worktrees..."
 echo
@@ -248,6 +274,7 @@ for project_wt in "$HOME/work"/*-wt; do
           # Clean up associated resources
           kill_tmux_session "$session_name"
           remove_tmuxp_config "$project_name" "$slug"
+          remove_from_active_tasks "$project_name" "$slug"
         else
           log_error "Failed to remove worktree $worktree_dir"
           ((error_count++))
