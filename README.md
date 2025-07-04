@@ -31,6 +31,7 @@ finishtask                                  # clean up worktree when done (run i
 cleanup-worktrees                           # weekly cleanup of merged worktrees
 list-tasks                                  # show all active tasks
 sync-active-tasks                           # sync active tasks file with actual state
+judge 45                                    # AI-powered review of PR #45 using local LLM
 
 ## New Features
 
@@ -50,6 +51,15 @@ sync-active-tasks                           # sync active tasks file with actual
 - Use `list-tasks` to see all active sessions with their details
 - Use `sync-active-tasks` to recover from manual tmux kills or sync the state file
 - The tracking file is automatically updated by `starttask`, `finishtask`, and `cleanup-worktrees`
+
+### AI-Powered PR Reviews with Judge
+- **Local LLM Integration**: Uses llama.cpp for private, fast code reviews
+- **GitHub CLI Integration**: Fetches PR data using `gh` CLI
+- **Metal Acceleration**: Automatic GPU support on macOS
+- **Configurable Models**: Support for any GGUF-format model
+- **Structured Output**: Markdown-formatted reviews with severity levels
+- **Smart PR Resolution**: Review by PR number or branch name
+- See [Judge Command Guide](docs/judge-command-guide.md) for setup and usage
 
 ### Using Claude Code Hooks to Send Ntfy.sh Notifications
 Prerequisites
