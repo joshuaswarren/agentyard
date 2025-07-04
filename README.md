@@ -25,10 +25,31 @@ eval "$(zoxide init zsh)"
 
 Add the lines above to ~/.zshrc (or ~/.bashrc), source the file, and you’re ready:
 
-starttask yourproject feature/new-feature   # create disposable worktree & session
+starttask yourproject feature/new-feature   # create disposable worktree & session with Claude Code
 jump-yourproject                            # fuzzy‑select a session
 finishtask                                  # clean up worktree when done (run inside session)
 cleanup-worktrees                           # weekly cleanup of merged worktrees
+list-tasks                                  # show all active tasks
+sync-active-tasks                           # sync active tasks file with actual state
+
+## New Features
+
+### Claude Code Integration
+- **Auto-launch**: `starttask` now automatically launches Claude Code in the tmux session
+- **Auto-install**: If Claude Code isn't installed, it will be installed automatically via npm
+- **Fallback**: If Claude Code fails to launch, the session falls back to a regular shell
+
+### Session Logging
+- All tmux session output is automatically logged to `~/logs/<project>/<session>-<branch>.log`
+- Branch names with slashes are sanitized (e.g., `feature/ui` becomes `feature_ui` in the log filename)
+- Logging continues even if you exit Claude Code and return to the shell
+- Log files are preserved after `finishtask` for future reference
+
+### Active Tasks Tracking
+- All active tasks are tracked in `~/agentyard/state/active-tasks.txt` (YAML format)
+- Use `list-tasks` to see all active sessions with their details
+- Use `sync-active-tasks` to recover from manual tmux kills or sync the state file
+- The tracking file is automatically updated by `starttask`, `finishtask`, and `cleanup-worktrees`
 
 ### Using Claude Code Hooks to Send Ntfy.sh Notifications
 Prerequisites

@@ -62,6 +62,12 @@ for cmd in git tmuxp sesh fzf; do
   command -v "$cmd" >/dev/null || { echo "Error: $cmd not installed." >&2; exit 1; }
 done
 
+# Check if Claude Code is installed
+if ! command -v claude >/dev/null; then
+  echo "Claude Code not found. Installing..."
+  npm install -g @anthropic-ai/claude-code || { echo "Error: Failed to install Claude Code" >&2; exit 1; }
+fi
+
 [[ -d "$main_repo/.git" ]] || { echo "Error: '$main_repo' is not a git repo." >&2; exit 1; }
 
 mkdir -p "$wt_root" "$tmuxp_priv"
@@ -117,6 +123,34 @@ git -C "$main_repo" worktree add --detach "$worktree_dir" \
 git -C "$worktree_dir" switch -c "$branch" "$base_branch" \
   || { echo "Error: git switch -c failed." >&2; exit 1; }
 
+# ---- create log directory and file ------------------------------------------
+log_dir="$HOME/logs/$project"
+mkdir -p "$log_dir"
+
+# Replace slashes with underscores in branch name for log filename
+safe_branch=$(echo "$branch" | tr '/' '_')
+log_file="$log_dir/${session_name}-${safe_branch}.log"
+
+# Create/truncate log file
+> "$log_file"
+
+# ---- add task to active tasks file ------------------------------------------
+# Create state directory if needed
+state_dir="$HOME/agentyard/state"
+mkdir -p "$state_dir"
+active_tasks_file="$state_dir/active-tasks.txt"
+
+# Add entry to active tasks file
+{
+  echo "- session_name: $session_name"
+  echo "  project: $project"
+  echo "  branch: $branch"
+  echo "  worktree_path: $worktree_dir"
+  echo "  creation_timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  echo "  log_file_path: $log_file"
+  echo ""
+} >> "$active_tasks_file"
+
 # ---- write tmuxp config -----------------------------------------------------
 cat > "$cfg_file" <<YAML
 session_name: $session_name
@@ -125,7 +159,8 @@ windows:
   - window_name: $project
     panes:
       - shell_command:
-          - exec \$SHELL -l            # open a login shell in the work‑tree
+          - tmux pipe-pane -o "cat >> '$log_file'"
+          - claude --dangerously-skip-permissions || exec \$SHELL -l
 YAML
 
 # ---- launch tmux session (detached) -----------------------------------------

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# List all active tasks from the state file
+set -euo pipefail
+
+active_tasks_file="$HOME/agentyard/state/active-tasks.txt"
+
+if [[ ! -f "$active_tasks_file" ]]; then
+  echo "No active tasks found."
+  exit 0
+fi
+
+# Count tasks
+task_count=$(grep -c "^- session_name:" "$active_tasks_file" 2>/dev/null || echo "0")
+
+if [[ "$task_count" -eq 0 ]]; then
+  echo "No active tasks found."
+  exit 0
+fi
+
+echo "Active tasks ($task_count):"
+echo "=================================================================================="
+printf "%-20s %-15s %-30s %s\n" "SESSION" "PROJECT" "BRANCH" "CREATED"
+echo "----------------------------------------------------------------------------------"
+
+# Parse and display tasks
+awk '/^- session_name:/ { 
+  session=$3
+  getline; project=$2
+  getline; branch=$2
+  getline; path=$2
+  getline; timestamp=$2
+  printf "%-20s %-15s %-30s %s\n", session, project, branch, timestamp
+}' "$active_tasks_file" | sort
+
+echo ""
+echo "Use 'tmux attach -t <session>' to connect to a session"
+echo "Use 'jump-<project>' for project-specific session picker"
