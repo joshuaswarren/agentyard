@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Sync active-tasks.txt with actual tmux sessions and worktrees
+set -euo pipefail
+
+state_dir="$HOME/agentyard/state"
+mkdir -p "$state_dir"
+active_tasks_file="$state_dir/active-tasks.txt"
+temp_file=$(mktemp)
+
+echo "🔄 Syncing active tasks with tmux sessions and worktrees..."
+
+# Get all tmux sessions matching our pattern
+tmux_sessions=$(tmux list-sessions -F '#S' 2>/dev/null | grep -E '^[^-]+-[0-9]+$' || true)
+
+# Start with empty file
+> "$temp_file"
+
+# Track statistics
+found_count=0
+missing_worktree_count=0
+
+# Check each session
+for session in $tmux_sessions; do
+  project="${session%-*}"
+  slug="${session##*-}"
+  worktree_dir="$HOME/work/${project}-wt/$slug"
+  
+  # Only include if worktree exists
+  if [[ -d "$worktree_dir/.git" ]]; then
+    # Get branch name
+    branch=$(git -C "$worktree_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    
+    # Check for log file
+    safe_branch=$(echo "$branch" | tr '/' '_')
+    log_file="$HOME/logs/$project/${session}-${safe_branch}.log"
+    
+    # Add to temp file
+    {
+      echo "- session_name: $session"
+      echo "  project: $project"
+      echo "  branch: $branch"
+      echo "  worktree_path: $worktree_dir"
+      echo "  creation_timestamp: unknown"  # Can't recover original timestamp
+      echo "  log_file_path: $log_file"
+      echo ""
+    } >> "$temp_file"
+    ((found_count++))
+  else
+    echo "  ⚠️  Session $session has no worktree at $worktree_dir"
+    ((missing_worktree_count++))
+  fi
+done
+
+# Check for orphaned worktrees (worktrees without tmux sessions)
+orphaned_count=0
+for project_wt in "$HOME/work"/*-wt; do
+  [[ -d "$project_wt" ]] || continue
+  
+  project_name=$(basename "$project_wt" | sed 's/-wt$//')
+  
+  for worktree_dir in "$project_wt"/[0-9][0-9][0-9]; do
+    [[ -d "$worktree_dir/.git" ]] || continue
+    
+    slug=$(basename "$worktree_dir")
+    session_name="${project_name}-${slug}"
+    
+    # Check if tmux session exists
+    if ! tmux has-session -t "$session_name" 2>/dev/null; then
+      echo "  ⚠️  Worktree $worktree_dir has no tmux session"
+      ((orphaned_count++))
+    fi
+  done
+done
+
+# Replace active tasks file
+mv "$temp_file" "$active_tasks_file"
+
+# Report results
+echo ""
+echo "📊 Sync complete:"
+echo "   Active tasks found: $found_count"
+if [[ "$missing_worktree_count" -gt 0 ]]; then
+  echo "   Sessions without worktrees: $missing_worktree_count"
+fi
+if [[ "$orphaned_count" -gt 0 ]]; then
+  echo "   Worktrees without sessions: $orphaned_count"
+fi
+
+echo ""
+echo "✅ Active tasks file updated: $active_tasks_file"

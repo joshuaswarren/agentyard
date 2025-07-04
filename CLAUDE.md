@@ -14,7 +14,7 @@ Agentyard is a lightweight toolbelt for managing multiple AI coding sessions usi
 
 ### Creating Work Sessions
 ```bash
-# Create a new disposable git worktree + tmux session
+# Create a new disposable git worktree + tmux session with Claude Code
 starttask <project> <branch> [slug]
 
 # Examples:
@@ -28,6 +28,10 @@ finishtask
 cleanup-worktrees              # Remove only merged worktrees
 cleanup-worktrees --dry-run    # Preview what would be removed
 cleanup-worktrees --all        # Interactive mode for all worktrees
+
+# View and manage active tasks
+list-tasks                     # Show all active tasks with details
+sync-active-tasks              # Sync active tasks file with actual state
 ```
 
 Each worktree is single-branch and disposable. The `starttask` command always creates a fresh branch from origin/main using `git switch -c`, avoiding checkout conflicts.
@@ -71,7 +75,10 @@ cd mcp && ./start-docker.sh
    - Creates numbered git worktrees under `~/work/<project>-wt/<slug>/`
    - Always creates fresh branch from origin/main using `git switch -c`
    - Generates tmuxp configuration in `~/agentyard/tmuxp/private/`
-   - Launches detached tmux session
+   - Launches detached tmux session with Claude Code auto-launched
+   - Logs all session output to `~/logs/<project>/<session>-<branch>.log`
+   - Updates active tasks tracking in `~/agentyard/state/active-tasks.txt`
+   - Auto-installs Claude Code if not present
    - Auto-creates `jump-<project>` helper on first use
    - Each worktree is disposable - one branch per worktree
 
@@ -81,12 +88,15 @@ cd mcp && ./start-docker.sh
    - Removes the git worktree
    - Deletes the worktree directory
    - Removes tmuxp config file
+   - Updates active tasks tracking file
    - Kills the tmux session
+   - Preserves log files for historical reference
 
 3. **cleanup-worktrees** (`bin/cleanup-worktrees`)
    - Weekly maintenance command for cleaning up old worktrees
    - Removes worktrees whose branches are fully merged
    - Cleans up associated tmux sessions and tmuxp configs
+   - Updates active tasks tracking file
    - `--dry-run` option to preview changes
    - `--all` option for interactive cleanup of unmerged worktrees
    - Runs git gc for maintenance after cleanup
@@ -94,6 +104,8 @@ cd mcp && ./start-docker.sh
 4. **Session Helpers**
    - `sesh-pick`: Fuzzy finder for tmux sessions
    - `jump-<project>`: Project-specific session picker (auto-generated)
+   - `list-tasks`: Display all active tasks with details
+   - `sync-active-tasks`: Sync active tasks file with actual tmux sessions and worktrees
    - Depends on: sesh, fzf, tmux
 
 5. **Claude Integration**
@@ -114,6 +126,14 @@ cd mcp && ./start-docker.sh
   ├── <project>-001.yaml
   ├── <project>-002.yaml
   └── ...
+
+~/agentyard/state/          # State tracking
+  └── active-tasks.txt      # YAML file tracking all active sessions
+
+~/logs/<project>/           # Session logs
+  ├── <project>-001-feature_new-ui.log
+  ├── <project>-002-bugfix_issue.log
+  └── ...
 ```
 
 ## Working with Git Worktrees
@@ -132,6 +152,7 @@ This approach prevents git index corruption and ensures clean starting points fo
 - tmux & tmuxp
 - sesh (tmux session manager)
 - fzf (fuzzy finder)
+- npm (for Claude Code installation)
 - Docker & docker-compose (for MCP servers)
 - zoxide (optional, for smarter cd)
 

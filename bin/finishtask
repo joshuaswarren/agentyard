@@ -94,6 +94,22 @@ if [[ -f "$tmuxp_config" ]]; then
   rm -f "$tmuxp_config"
 fi
 
+# ---- Remove task from active tasks file -------------------------------------
+active_tasks_file="$HOME/agentyard/state/active-tasks.txt"
+if [[ -f "$active_tasks_file" ]]; then
+  echo "Updating active tasks list..."
+  # Create temp file without the current session
+  temp_file=$(mktemp)
+  awk -v session="$session_name" '
+    /^- session_name:/ { 
+      if ($3 == session) { skip=1 } 
+      else { skip=0 }
+    }
+    !skip { print }
+  ' "$active_tasks_file" > "$temp_file"
+  mv "$temp_file" "$active_tasks_file"
+fi
+
 # ---- Success message --------------------------------------------------------
 # Show success message before killing the session
 cat <<EOF
