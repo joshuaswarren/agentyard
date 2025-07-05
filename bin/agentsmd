@@ -259,10 +259,21 @@ run_claude_analysis() {
   local retry_count=0
   local error_file=$(mktemp)
   
+  # Determine timeout command (macOS vs Linux)
+  local timeout_cmd="timeout"
+  if ! command -v timeout &> /dev/null; then
+    if command -v gtimeout &> /dev/null; then
+      timeout_cmd="gtimeout"
+    else
+      log_error "Neither 'timeout' nor 'gtimeout' found. Please install coreutils."
+      return 1
+    fi
+  fi
+
   # Retry loop with exponential backoff
   while [[ $retry_count -lt $MAX_RETRIES ]]; do
     # Execute Claude Code with timeout
-    if output=$(timeout "$TIMEOUT" claude --print --dangerously-skip-permissions --output-format text --model "$CLAUDE_MODEL" "$prompt" 2>"$error_file"); then
+    if output=$($timeout_cmd "$TIMEOUT" claude --print --dangerously-skip-permissions --output-format text --model "$CLAUDE_MODEL" "$prompt" 2>"$error_file"); then
       exit_code=0
       break
     else
