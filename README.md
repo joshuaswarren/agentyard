@@ -56,6 +56,10 @@ judge 45                                    # AI-powered review of PR #45 using 
 - **Local LLM Integration**: Uses llama.cpp for private, fast code reviews
 - **GitHub CLI Integration**: Fetches PR data using `gh` CLI
 - **Metal Acceleration**: Automatic GPU support on macOS
+- **Automatic Model Download**: Downloads models from HuggingFace with smart quantization selection
+- **Flexible Model Storage**: Environment variable, config file, or per-model path settings
+- **Easy Setup**: `judge --init-config` creates configuration with sensible defaults
+- **Model Validation**: Checks for model availability before starting review
 - **Configurable Models**: Support for any GGUF-format model
 - **Structured Output**: Markdown-formatted reviews with severity levels
 - **Smart PR Resolution**: Review by PR number or branch name

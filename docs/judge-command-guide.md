@@ -32,9 +32,33 @@ Judge integrates seamlessly with the agentyard workflow, using the GitHub CLI to
 ### First Run
 
 The `judge` command will automatically:
+- Install required Python packages (`llama-cpp-python`, `PyYAML`, `requests`, `psutil`)
 - Install `llama-cpp-python` with Metal support on macOS
-- Create a default configuration file at `~/.agentyard/judge.yaml`
-- Create the AI helper script
+- Prompt you to create a configuration file if one doesn't exist
+
+### Initial Setup
+
+1. **Create Configuration**:
+   ```bash
+   judge --init-config
+   ```
+   This creates a default configuration file at `~/.agentyard/judge.yaml`
+
+2. **Set Model Path** (optional):
+   ```bash
+   # Option 1: Environment variable (affects all models)
+   export AGENTYARD_MODELS_PATH="/path/to/models"
+   
+   # Option 2: Edit config file
+   # See Configuration section below
+   ```
+
+3. **Download a Model**:
+   When you first run `judge`, it will:
+   - Check if the specified model exists locally
+   - Search HuggingFace for available GGUF versions
+   - Recommend a quantization based on your system specs
+   - Offer to download the model automatically
 
 ## Basic Usage
 
@@ -58,22 +82,45 @@ judge 45 --model mistral-small-2409
 judge 45 --config ~/my-judge-config.yaml
 ```
 
+### Create a Configuration File
+```bash
+# Create default config in current directory
+judge --init-config
+
+# Create config at specific location
+judge --init-config ~/custom-judge.yaml
+```
+
 ## Configuration
 
-Judge uses a YAML configuration file located at `~/.agentyard/judge.yaml` by default.
+Judge uses a YAML configuration file located at `~/.agentyard/judge.yaml` by default. See `docs/judge-config-sample.yaml` for a complete example with all options.
 
-### Default Configuration
+### Model Path Resolution
+
+Judge resolves model paths in the following order:
+1. **Per-model path** in config file (highest priority)
+2. **Environment variable**: `$AGENTYARD_MODELS_PATH/<model>.gguf`
+3. **Config file setting**: `models_dir` value
+4. **Default**: `~/.agentyard/models/<model>.gguf`
+
+### Basic Configuration
 ```yaml
 # Judge AI PR Reviewer Configuration
 
 model:
   name: "mistral-small-2409"
-  # Update this path to your model location
-  path: "~/.agentyard/models/mistral-small-2409.gguf"
   context_size: 32768
   gpu_layers: -1  # Use all GPU layers on Metal
   temperature: 0.1
   max_tokens: 4096
+
+# Global models directory
+models_dir: "~/.agentyard/models"
+
+# Per-model overrides (optional)
+models:
+  "codellama-7b":
+    path: "/custom/path/to/codellama.gguf"
 
 review:
   max_diff_lines: 1000
@@ -84,18 +131,39 @@ github:
   default_remote: "origin"
 ```
 
-### Model Configuration
+### Model Management
 
+#### Automatic Model Download
+Judge can automatically download models from HuggingFace:
+
+1. **Run judge with any model name**:
+   ```bash
+   judge 45 --model mistralai/Mistral-7B-Instruct-v0.2
+   ```
+
+2. **Judge will**:
+   - Search HuggingFace for GGUF versions
+   - Detect your system specs (RAM, GPU)
+   - Recommend the best quantization
+   - Download with progress indicator
+
+#### Manual Model Setup
 1. **Download a Model**: 
    - Visit https://huggingface.co/
    - Search for GGUF format models (e.g., "mistral-small gguf")
-   - Download a quantized version (Q4_K_M recommended for balance of quality and speed)
-   - Save to `~/.agentyard/models/`
+   - Download a quantized version based on your system:
+     - High-end (32GB+ RAM): Q8_0, Q6_K
+     - Mid-range (16-24GB): Q5_K_M, Q4_K_M
+     - Low-end (<16GB): Q4_K_M, Q3_K_M
 
-2. **Update Configuration**:
-   - Set the `path` to your downloaded model
-   - Adjust `context_size` based on your model's capabilities
-   - Set `gpu_layers` to -1 for full GPU acceleration, or a specific number to limit
+2. **Configure Model Path**:
+   ```bash
+   # Option 1: Environment variable
+   export AGENTYARD_MODELS_PATH="/path/to/models"
+   
+   # Option 2: Edit config file
+   # Add to models section for specific model
+   ```
 
 ### Performance Tuning
 
@@ -187,8 +255,9 @@ finishtask
 ## Troubleshooting
 
 ### "Model file not found"
-- Download a GGUF model and update the path in `~/.agentyard/judge.yaml`
-- Ensure the path uses `~` expansion or absolute paths
+- Run `judge --init-config` to create configuration
+- Judge will offer to download the model automatically
+- Or manually download a GGUF model and set the path
 
 ### "gh not authenticated"
 ```bash
