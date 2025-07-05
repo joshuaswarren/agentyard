@@ -79,6 +79,7 @@ mentor                                      # AI-powered code review of recent c
 - **Actionable Feedback**: Provides specific before/after code examples with explanations
 - **Dual Output**: Shows findings in terminal and appends to AGENTS.md/CLAUDE.md
 - **Flexible Model Selection**: Default to o3, configurable via --model flag, env var, or .env file
+  - **Note**: o3 models (o3, o3-mini) use fixed reasoning parameters and don't support temperature control
 - **Usage Examples**:
   - `mentor` - Review most recent commit
   - `mentor abc123def` - Review specific commit

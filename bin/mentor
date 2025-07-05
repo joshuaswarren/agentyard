@@ -334,15 +334,22 @@ def call_openai_api(prompt: str, api_key: str, model: str) -> Optional[List[Dict
     try:
         print_info(f"Analyzing with {model}...")
         
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
+        # Build parameters conditionally based on model
+        params = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": "You are a code review expert. Always respond with valid JSON."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.3,
-            response_format={"type": "json_object"}
-        )
+            "response_format": {"type": "json_object"}
+        }
+        
+        # Only add temperature for non-o3 models
+        # o3 models only support default temperature value (1)
+        if not model.startswith('o3'):
+            params["temperature"] = 0.3
+        
+        response = client.chat.completions.create(**params)
         
         # Parse the response
         content = response.choices[0].message.content
