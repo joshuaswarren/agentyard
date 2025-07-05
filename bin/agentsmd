@@ -283,6 +283,9 @@ run_claude_analysis() {
       if [[ $retry_count -lt $MAX_RETRIES ]]; then
         local wait_time=$((2 ** retry_count))
         log_warning "Claude analysis failed (attempt $retry_count/$MAX_RETRIES), retrying in ${wait_time}s..."
+        if [[ -s "$error_file" ]]; then
+          log_warning "Error: $(head -n 3 "$error_file" | tr '\n' ' ')"
+        fi
         sleep "$wait_time"
       fi
     fi
@@ -297,10 +300,16 @@ run_claude_analysis() {
     return 0
   else
     # Error - log and return error
-    log_error "Claude Code failed after $MAX_RETRIES attempts"
+    log_error "Claude Code failed after $MAX_RETRIES attempts (exit code: $exit_code)"
     if [[ -s "$error_file" ]]; then
       log_error "Error details:"
       cat "$error_file" >&2
+    else
+      if [[ $exit_code -eq 124 ]]; then
+        log_error "Claude command timed out after ${TIMEOUT} seconds"
+      else
+        log_error "No error details captured. Claude may have been terminated."
+      fi
     fi
     rm -f "$error_file"
     return 1
