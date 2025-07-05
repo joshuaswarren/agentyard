@@ -21,6 +21,10 @@ export TMUXP_CONFIGDIR="$HOME/agentyard/tmuxp:$HOME/agentyard-team/tmuxp:$HOME/a
 
 # (optional) sesh & zoxide hooks
 eval "$(zoxide init zsh)"
+
+# For mentor command - OpenAI API key
+export OPENAI_API_KEY="your-api-key-here"  # Required for mentor command
+# export OPENAI_MODEL="gpt-4"              # Optional: override default model (o3)
 ```
 
 Add the lines above to ~/.zshrc (or ~/.bashrc), source the file, and you’re ready:
@@ -34,6 +38,7 @@ sync-active-tasks                           # sync active tasks file with actual
 judge 45                                    # AI-powered review of PR #45 using local LLM
 judge scan-models                           # Scan for models and update configuration  
 /plan "implement feature X"                 # Interactive planning with codebase analysis
+mentor                                      # AI-powered code review of recent commits using OpenAI
 
 ## New Features
 
@@ -79,6 +84,22 @@ judge scan-models                           # Scan for models and update configu
 - **Structured Output**: Detailed tasks with complexity estimates
 - **Agentyard Integration**: Suggests `starttask` commands for implementation
 - See [Plan Command Guide](docs/plan-command.md) for details
+
+### AI-Powered Commit Reviews with Mentor
+- **OpenAI Integration**: Uses OpenAI's API for comprehensive code quality analysis
+- **Git Integration**: Reviews single commits, specific commits, or commit ranges
+- **Existing Guidelines Awareness**: Checks AGENTS.md and CLAUDE.md to avoid duplicate suggestions
+- **Smart Filtering**: Automatically filters out third-party code (node_modules, vendor, etc.)
+- **Language-Specific Standards**: Enforces PEP 8 for Python, PSR-12 for PHP, and other standards
+- **Actionable Feedback**: Provides specific before/after code examples with explanations
+- **Dual Output**: Shows findings in terminal and appends to AGENTS.md/CLAUDE.md
+- **Flexible Model Selection**: Default to o3, configurable via --model flag, env var, or .env file
+  - **Note**: o3 models (o3, o3-mini) use fixed reasoning parameters and don't support temperature control
+- **Usage Examples**:
+  - `mentor` - Review most recent commit
+  - `mentor abc123def` - Review specific commit
+  - `mentor abc123 def456` - Review commit range
+  - `mentor --model gpt-4` - Use specific model origin/main
 
 ### Using Claude Code Hooks to Send Ntfy.sh Notifications
 Prerequisites
