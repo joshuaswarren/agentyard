@@ -8,15 +8,23 @@
 # Options:
 #   --model MODEL      Use specific model (default: from config)
 #   --config FILE      Use custom config file (default: ~/.agentyard/judge.yaml)
+#   --init-config      Create default config file and exit
 #   -h, --help         Show this help message
 #
 # Examples:
 #   judge 45                           # Review PR #45
 #   judge feature/new-login            # Review PR by branch name
 #   judge 45 --model mistral-small     # Use specific model
+#   judge --init-config                # Create default configuration
 #
 # Dependencies: gh, python3, llama-cpp-python
 # Configuration: ~/.agentyard/judge.yaml
+#
+# Model Path Resolution (in order of precedence):
+#   1. Per-model path in config file
+#   2. $AGENTYARD_MODELS_PATH environment variable
+#   3. models_dir in config file
+#   4. ~/.agentyard/models/
 #
 set -euo pipefail
 
@@ -38,22 +46,29 @@ NC='\033[0m' # No Color
 usage() {
   cat <<EOF
 Usage: $prog <pr> [options]
+       $prog --init-config
 
   pr        PR number or branch name
 
 Options:
   --model MODEL      Use specific model (default: from config)
   --config FILE      Use custom config file (default: ~/.agentyard/judge.yaml)
+  --init-config      Create default config file and exit
   -h, --help         Show this help message
 
 Examples:
   $prog 45                           # Review PR #45
   $prog feature/new-login            # Review PR by branch name
   $prog 45 --model mistral-small     # Use specific model
+  $prog --init-config                # Create default configuration
 
 Configuration:
   Default config file: ~/.agentyard/judge.yaml
-  See documentation for configuration options.
+  Model path resolution (in order):
+    1. Per-model path in config
+    2. \$AGENTYARD_MODELS_PATH/<model>.gguf
+    3. Config models_dir setting
+    4. ~/.agentyard/models/<model>.gguf
 EOF
 }
 
@@ -63,10 +78,18 @@ if [[ $# -eq 0 || ${1:-} == "-h" || ${1:-} == "--help" ]]; then
   exit 0
 fi
 
-pr_input=$1
-shift
+# Handle --init-config separately
+if [[ ${1:-} == "--init-config" ]]; then
+  init_config=true
+  shift
+  config_file="${1:-$DEFAULT_CONFIG}"
+else
+  init_config=false
+  pr_input=$1
+  shift
+fi
 
-config_file="$DEFAULT_CONFIG"
+config_file="${config_file:-$DEFAULT_CONFIG}"
 model=""
 
 while [[ $# -gt 0 ]]; do
@@ -129,6 +152,68 @@ if ! python3 -c "import yaml" 2>/dev/null; then
   }
 fi
 
+# Check if requests is installed for HuggingFace API
+if ! python3 -c "import requests" 2>/dev/null; then
+  echo "Installing requests for model management..."
+  pip3 install requests || {
+    echo -e "${RED}Error: Failed to install requests${NC}" >&2
+    exit 1
+  }
+fi
+
+# Check if psutil is installed for system specs
+if ! python3 -c "import psutil" 2>/dev/null; then
+  echo "Installing psutil for system detection..."
+  pip3 install psutil || {
+    echo -e "${RED}Error: Failed to install psutil${NC}" >&2
+    exit 1
+  }
+fi
+
+# ---- Handle --init-config ---------------------------------------------------
+if [[ "$init_config" == "true" ]]; then
+  echo "📝 Creating configuration file..."
+  
+  # Add Python path for our modules
+  export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
+  
+  python3 - "$config_file" <<'EOF'
+import sys
+import os
+import yaml
+from pathlib import Path
+from judge.model_manager import create_default_config
+
+config_path = Path(sys.argv[1])
+
+# Check if config already exists
+if config_path.exists():
+    response = input(f"Config file already exists at {config_path}. Overwrite? [y/N]: ").strip().lower()
+    if response != 'y':
+        print("Configuration creation cancelled.")
+        sys.exit(0)
+
+# Create directory if needed
+config_path.parent.mkdir(parents=True, exist_ok=True)
+
+# Create default config
+config = create_default_config(config_path)
+
+# Write config file
+with open(config_path, 'w') as f:
+    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+
+print(f"✅ Configuration created at: {config_path}")
+print("\nDefault model: mistral-small-2409")
+print(f"Models directory: {config['models_dir']}")
+print("\nYou can now:")
+print("  1. Set AGENTYARD_MODELS_PATH environment variable")
+print("  2. Edit the config to set custom model paths")
+print("  3. Run 'judge <pr>' to review a pull request")
+EOF
+  exit $?
+fi
+
 # ---- Check GitHub authentication --------------------------------------------
 if ! gh auth status >/dev/null 2>&1; then
   echo -e "${RED}Error: Not authenticated with GitHub CLI${NC}" >&2
@@ -158,35 +243,51 @@ fi
 # ---- Create default config if it doesn't exist ------------------------------
 if [[ ! -f "$config_file" ]]; then
   echo "Creating default configuration at $config_file..."
-  mkdir -p "$(dirname "$config_file")"
-  cat > "$config_file" <<'EOF'
-# Judge AI PR Reviewer Configuration
-
-model:
-  name: "mistral-small-2409"
-  # Update this path to your model location
-  path: "~/.agentyard/models/mistral-small-2409.gguf"
-  context_size: 32768
-  gpu_layers: -1  # Use all GPU layers on Metal
-  temperature: 0.1
-  max_tokens: 4096
-
-review:
-  max_diff_lines: 1000
-  include_pr_description: true
-  output_format: "markdown"
-
-github:
-  default_remote: "origin"
-EOF
-  echo -e "${YELLOW}Please update the model path in $config_file${NC}"
+  echo "Run 'judge --init-config' to create a configuration file."
+  exit 1
 fi
+
+# ---- Validate model early ---------------------------------------------------
+echo "🔍 Validating model..."
+
+# Add Python path for our modules
+export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
+
+# Determine which model to use
+if [[ -n "$model" ]]; then
+  model_name="$model"
+else
+  # Extract model name from config
+  model_name=$(python3 -c "
+import yaml
+with open('$config_file', 'r') as f:
+    config = yaml.safe_load(f)
+    print(config.get('model', {}).get('name', 'mistral-small-2409'))
+" 2>/dev/null || echo "mistral-small-2409")
+fi
+
+# Validate and download model if needed
+python3 - "$config_file" "$model_name" <<'EOF' || exit 1
+import sys
+from judge.model_manager import ModelManager
+
+config_path = sys.argv[1]
+model_name = sys.argv[2]
+
+manager = ModelManager(config_path)
+success, model_path = manager.validate_and_download_model(model_name)
+
+if not success:
+    print(f"❌ Failed to validate/download model: {model_name}")
+    sys.exit(1)
+
+print(f"✅ Model validated: {model_path}")
+EOF
 
 # ---- Create Python helper script --------------------------------------------
 helper_script="$SCRIPT_DIR/judge-ai.py"
-if [[ ! -f "$helper_script" ]]; then
-  echo "Creating AI helper script..."
-  cat > "$helper_script" <<'EOF'
+echo "Creating AI helper script..."
+cat > "$helper_script" <<'EOF'
 #!/usr/bin/env python3
 """
 judge-ai.py - AI helper for the judge command
@@ -198,13 +299,22 @@ import json
 import yaml
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 import argparse
+
+# Add parent directory to path for our modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
 
 try:
     from llama_cpp import Llama
 except ImportError:
     print("Error: llama-cpp-python not installed", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    from judge.model_manager import ModelManager
+except ImportError:
+    print("Error: Could not import model manager", file=sys.stderr)
     sys.exit(1)
 
 
@@ -213,14 +323,13 @@ def load_config(config_path: str) -> Dict[str, Any]:
     try:
         config_path = os.path.expanduser(config_path)
         with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+            return yaml.safe_load(f) or {}
     except Exception as e:
         print(f"Error loading config: {e}", file=sys.stderr)
         # Return default config
         return {
             "model": {
                 "name": "mistral-small-2409",
-                "path": "~/.agentyard/models/mistral-small-2409.gguf",
                 "context_size": 32768,
                 "gpu_layers": -1,
                 "temperature": 0.1,
@@ -234,7 +343,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
         }
 
 
-def create_review_prompt(pr_data: Dict[str, Any], diff_content: str) -> str:
+def create_review_prompt(pr_data: Dict[str, Any], diff_content: str) -> Tuple[str, str]:
     """Create the prompt for code review"""
     system_prompt = """You are an expert code reviewer called "Judge". Your role is to:
 1. Identify bugs, security issues, and logic errors
@@ -284,24 +393,19 @@ def run_review(config_path: str, pr_data_json: str, diff_content: str,
     try:
         # Load configuration
         config = load_config(config_path)
-        model_config = config['model']
+        model_config = config.get('model', {})
         
-        # Override model if specified
-        if model_override:
-            model_config['name'] = model_override
+        # Determine model name
+        model_name = model_override or model_config.get('name', 'mistral-small-2409')
         
-        # Expand model path
-        model_path = os.path.expanduser(model_config['path'])
+        # Use ModelManager to get model path
+        manager = ModelManager(config_path)
+        model_path = manager.get_model_path(model_name)
         
-        # Check if model file exists
-        if not os.path.exists(model_path):
+        # Verify model exists (should already be validated by main script)
+        if not model_path.exists():
             print(f"Error: Model file not found at {model_path}", file=sys.stderr)
-            print("Please download the model or update the path in your config.", file=sys.stderr)
-            print("\nTo download models:", file=sys.stderr)
-            print("  1. Visit https://huggingface.co/", file=sys.stderr)
-            print("  2. Search for GGUF models (e.g., 'mistral-small gguf')", file=sys.stderr)
-            print("  3. Download a quantized version (e.g., Q4_K_M)", file=sys.stderr)
-            print(f"  4. Save to {model_path}", file=sys.stderr)
+            print("The model should have been validated earlier. Please check your setup.", file=sys.stderr)
             sys.exit(1)
         
         # Parse PR data
@@ -313,7 +417,7 @@ def run_review(config_path: str, pr_data_json: str, diff_content: str,
         # Initialize model with progress indicator
         print("🤖 Loading AI model...", file=sys.stderr)
         llm = Llama(
-            model_path=model_path,
+            model_path=str(model_path),
             n_ctx=model_config.get('context_size', 32768),
             n_gpu_layers=model_config.get('gpu_layers', -1),
             verbose=False
@@ -360,8 +464,7 @@ def main():
 if __name__ == '__main__':
     main()
 EOF
-  chmod +x "$helper_script"
-fi
+chmod +x "$helper_script"
 
 # ---- Fetch PR information ---------------------------------------------------
 echo "📥 Fetching PR #$pr_number..."
