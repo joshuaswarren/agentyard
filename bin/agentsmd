@@ -40,9 +40,12 @@ VERBOSE=false
 NO_CACHE=false
 LIST_MIGRATIONS=false
 CLAUDE_MODEL="sonnet"
-TIMEOUT=60
+TIMEOUT=600
 MAX_RETRIES=2
 SHOW_PROMPTS=false
+COMMAND=""
+DRY_RUN=false
+OPENAI_MODEL="o3"
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,9 +56,14 @@ NC='\033[0m' # No Color
 
 usage() {
   cat <<EOF
-Usage: $prog [options]
+Usage: $prog [command] [options]
 
 Manage AGENTS.md files with migration-style best practices
+
+Commands:
+  dedupe                  Remove duplicate text using OpenAI
+  
+  If no command is specified, runs the default migration behavior.
 
 Options:
   -h, --help              Show this help message
@@ -65,20 +73,32 @@ Options:
   -p, --project <path>    Target specific directory (default: current)
   -l, --list-migrations   Show all available migrations
   -m, --model <model>     Claude model to use (default: sonnet)
-  -t, --timeout <secs>    Timeout per Claude call (default: 60)
+  -t, --timeout <secs>    Timeout per Claude call (default: 600)
   -r, --max-retries <n>   Max retry attempts (default: 2)
   -s, --show-prompts      Show prompts being sent to Claude
+
+Dedupe Options:
+  --dry-run              Preview changes without applying them
+  --openai-model <model> OpenAI model to use (default: o3)
 
 Examples:
   $prog                    # Basic usage in current directory
   $prog --check-only       # Preview changes
   $prog --project ~/work/myapp --verbose
   $prog --list-migrations
+  $prog dedupe            # Remove duplicates from AGENTS.md
+  $prog dedupe --dry-run  # Preview duplicate removal
 
 EOF
 }
 
 # ---- Parse command line arguments --------------------------------------------
+# Check for command first
+if [[ $# -gt 0 ]] && [[ "$1" != "-"* ]]; then
+  COMMAND="$1"
+  shift
+fi
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     -h|--help)
@@ -120,6 +140,14 @@ while [[ $# -gt 0 ]]; do
     -s|--show-prompts)
       SHOW_PROMPTS=true
       shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --openai-model)
+      OPENAI_MODEL="$2"
+      shift 2
       ;;
     *)
       echo "Unknown option: $1"
@@ -417,8 +445,41 @@ create_symlink() {
   fi
 }
 
+# Run dedupe command
+run_dedupe() {
+  local project_path
+  if ! project_path=$(get_project_path); then
+    exit 1
+  fi
+  
+  log "Running duplicate removal on AGENTS.md..."
+  
+  # Build command args
+  local dedupe_args=()
+  [[ "$DRY_RUN" == "true" ]] && dedupe_args+=("--dry-run")
+  [[ "$VERBOSE" == "true" ]] && dedupe_args+=("--verbose")
+  dedupe_args+=("--timeout" "$TIMEOUT")
+  dedupe_args+=("--model" "$OPENAI_MODEL")
+  dedupe_args+=("--max-retries" "$MAX_RETRIES")
+  
+  # Change to project directory and run dedupe
+  if cd "$project_path" && "$SCRIPT_DIR/agentsmd-dedupe" "${dedupe_args[@]}"; then
+    log_success "Duplicate removal complete!"
+    return 0
+  else
+    log_error "Duplicate removal failed"
+    return 1
+  fi
+}
+
 # Main function
 main() {
+  # Handle commands
+  if [[ "$COMMAND" == "dedupe" ]]; then
+    run_dedupe
+    exit $?
+  fi
+  
   # Handle list migrations
   if [[ "$LIST_MIGRATIONS" == "true" ]]; then
     list_migrations

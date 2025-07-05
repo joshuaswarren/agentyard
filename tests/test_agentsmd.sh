@@ -166,6 +166,16 @@ test_help_command() {
         TESTS_FAILED=$((TESTS_FAILED + 1))
     fi
     TESTS_RUN=$((TESTS_RUN + 1))
+    
+    # Check for dedupe command in help
+    if echo "$output" | grep -q "dedupe"; then
+        echo -e "${GREEN}✓${NC} Help text contains dedupe command"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Help text missing dedupe command"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
 }
 
 test_list_migrations() {
@@ -431,6 +441,181 @@ test_error_handling() {
     TESTS_RUN=$((TESTS_RUN + 1))
 }
 
+test_dedupe_dry_run() {
+    echo -e "\n${YELLOW}Testing dedupe --dry-run mode...${NC}"
+    
+    setup_test_env
+    
+    # Create AGENTS.md with duplicates
+    cat > AGENTS.md <<'EOF'
+# AGENTS.md
+
+## Overview
+This is the overview section.
+
+## Code Quality
+Follow best practices.
+
+## Overview
+This is the overview section.
+
+## Testing
+Write comprehensive tests.
+
+## Code Quality
+Follow best practices.
+EOF
+    
+    # Mock the Python script to simulate dedupe behavior
+    export PATH="${TEST_DIR}/mock_bin:$PATH"
+    mkdir -p "${TEST_DIR}/mock_bin"
+    cat > "${TEST_DIR}/mock_bin/agentsmd-dedupe" <<'EOF'
+#!/bin/bash
+echo "Found 2 duplicate text block(s):"
+echo ""
+echo "Duplicate #1:"
+echo "  First occurrence: line 3"
+echo "  Duplicate locations: lines 8"
+echo "  Total occurrences: 2"
+echo "  Text preview: '## Overview\\nThis is the overview section.'"
+echo ""
+echo "Duplicate #2:"
+echo "  First occurrence: line 6"
+echo "  Duplicate locations: lines 14"
+echo "  Total occurrences: 2"
+echo "  Text preview: '## Code Quality\\nFollow best practices.'"
+echo ""
+echo "--dry-run mode: No changes will be made"
+echo "Would remove 4 duplicate occurrences"
+echo "Duplicate removal complete!"
+EOF
+    chmod +x "${TEST_DIR}/mock_bin/agentsmd-dedupe"
+    
+    local output=$("$AGENTSMD_CMD" dedupe --dry-run 2>&1)
+    local exit_code=$?
+    
+    assert_equals "0" "$exit_code" "Dedupe dry-run exit code"
+    
+    # Check output contains expected messages
+    if echo "$output" | grep -q "duplicate removal"; then
+        echo -e "${GREEN}✓${NC} Dedupe dry-run shows operation message"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Dedupe dry-run missing operation message"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    if echo "$output" | grep -qi "complete\|removal"; then
+        echo -e "${GREEN}✓${NC} Dedupe dry-run shows status message"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Dedupe dry-run missing status message"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    # Verify file was not modified
+    if grep -q "## Testing" AGENTS.md; then
+        echo -e "${GREEN}✓${NC} AGENTS.md not modified in dry-run mode"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} AGENTS.md was modified in dry-run mode"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    cleanup_test_env
+}
+
+test_dedupe_no_duplicates() {
+    echo -e "\n${YELLOW}Testing dedupe with no duplicates...${NC}"
+    
+    setup_test_env
+    
+    # Create AGENTS.md without duplicates
+    cat > AGENTS.md <<'EOF'
+# AGENTS.md
+
+## Overview
+This is the overview section.
+
+## Code Quality
+Follow best practices.
+
+## Testing
+Write comprehensive tests.
+EOF
+    
+    # Mock the Python script for no duplicates case
+    export PATH="${TEST_DIR}/mock_bin:$PATH"
+    mkdir -p "${TEST_DIR}/mock_bin"
+    cat > "${TEST_DIR}/mock_bin/agentsmd-dedupe" <<'EOF'
+#!/bin/bash
+echo "No duplicates found in AGENTS.md"
+echo "No changes needed"
+EOF
+    chmod +x "${TEST_DIR}/mock_bin/agentsmd-dedupe"
+    
+    local output=$("$AGENTSMD_CMD" dedupe 2>&1)
+    local exit_code=$?
+    
+    assert_equals "0" "$exit_code" "Dedupe with no duplicates exit code"
+    
+    if echo "$output" | grep -q "duplicate removal"; then
+        echo -e "${GREEN}✓${NC} Dedupe runs successfully"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Dedupe operation failed"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    cleanup_test_env
+}
+
+test_dedupe_missing_api_key() {
+    echo -e "\n${YELLOW}Testing dedupe without API key...${NC}"
+    
+    setup_test_env
+    
+    # Create AGENTS.md
+    echo "# AGENTS.md" > AGENTS.md
+    
+    # Unset API key first
+    unset OPENAI_API_KEY
+    
+    # Run the command without mocking to test actual behavior
+    local exit_code=0
+    local output=""
+    
+    if output=$("$AGENTSMD_CMD" dedupe 2>&1); then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
+    
+    if [[ $exit_code -ne 0 ]]; then
+        echo -e "${GREEN}✓${NC} Dedupe fails without API key"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Dedupe should fail without API key"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    if echo "$output" | grep -qi "error\|failed"; then
+        echo -e "${GREEN}✓${NC} Dedupe shows error message"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Dedupe missing error message"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    cleanup_test_env
+}
+
 # Main test runner
 main() {
     echo -e "${BLUE}================================${NC}"
@@ -448,6 +633,9 @@ main() {
     test_project_option
     test_verbose_mode
     test_error_handling
+    test_dedupe_dry_run
+    test_dedupe_no_duplicates
+    test_dedupe_missing_api_key
     
     # Summary
     echo -e "\n${BLUE}================================${NC}"

@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#
+# agentsmd-dedupe - Wrapper script for agentsmd-dedupe.py
+#
+# This script ensures Python dependencies are installed and runs
+# the dedupe functionality with proper environment setup.
+#
+set -euo pipefail
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="${SCRIPT_DIR}/agentsmd-dedupe.py"
+
+# Check if Python script exists
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+  echo "Error: Python script not found at $PYTHON_SCRIPT" >&2
+  exit 1
+fi
+
+# Check for Python 3
+if ! command -v python3 &> /dev/null; then
+  echo "Error: Python 3 is required but not found" >&2
+  echo "Please install Python 3.7 or later" >&2
+  exit 1
+fi
+
+# Function to check if a Python package is installed
+check_package() {
+  python3 -c "import $1" 2>/dev/null
+}
+
+# Check if openai package is installed
+if ! check_package openai; then
+  echo "Installing OpenAI Python package..."
+  
+  # Try to install in user space first
+  if python3 -m pip install --user openai; then
+    echo "OpenAI package installed successfully"
+  else
+    echo "Error: Failed to install OpenAI package" >&2
+    echo "Please install it manually with: pip install openai" >&2
+    exit 1
+  fi
+fi
+
+# Pass all arguments to the Python script
+exec python3 "$PYTHON_SCRIPT" "$@"
