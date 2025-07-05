@@ -32,6 +32,8 @@ cleanup-worktrees                           # weekly cleanup of merged worktrees
 list-tasks                                  # show all active tasks
 sync-active-tasks                           # sync active tasks file with actual state
 judge 45                                    # AI-powered review of PR #45 using local LLM
+judge scan-models                           # Scan for models and update configuration  
+/plan "implement feature X"                 # Interactive planning with codebase analysis
 
 ## New Features
 
@@ -56,6 +58,10 @@ judge 45                                    # AI-powered review of PR #45 using 
 - **Local LLM Integration**: Uses llama.cpp for private, fast code reviews
 - **GitHub CLI Integration**: Fetches PR data using `gh` CLI
 - **Metal Acceleration**: Automatic GPU support on macOS
+- **Namespace Model Storage**: Models organized as `namespace/model/` (e.g., `mistralai/mistral-7b/`)
+- **Model Discovery**: `judge scan-models` finds models in multiple locations including LM Studio
+- **GGUF Metadata Parsing**: Extracts architecture, quantization, and parameters from model files
+- **Non-Interactive Mode**: `--force` flag for CI/automation use
 - **Automatic Model Download**: Downloads models from HuggingFace with smart quantization selection
 - **Flexible Model Storage**: Environment variable, config file, or per-model path settings
 - **Easy Setup**: `judge --init-config` creates configuration with sensible defaults
@@ -64,6 +70,15 @@ judge 45                                    # AI-powered review of PR #45 using 
 - **Structured Output**: Markdown-formatted reviews with severity levels
 - **Smart PR Resolution**: Review by PR number or branch name
 - See [Judge Command Guide](docs/judge-command-guide.md) for setup and usage
+
+### Interactive Planning with /plan Command
+- **Codebase Analysis**: Automatically analyzes relevant files before planning
+- **Interactive Questions**: Asks clarifying questions to create better plans
+- **GitHub Integration**: Updates issue descriptions with generated plans
+- **Planning Only**: Never implements code - purely for planning
+- **Structured Output**: Detailed tasks with complexity estimates
+- **Agentyard Integration**: Suggests `starttask` commands for implementation
+- See [Plan Command Guide](docs/plan-command.md) for details
 
 ### Using Claude Code Hooks to Send Ntfy.sh Notifications
 Prerequisites

@@ -7,6 +7,7 @@ Handles model discovery, validation, downloading, and path resolution
 import os
 import sys
 import json
+import struct
 import platform
 import psutil
 import requests
@@ -16,7 +17,154 @@ from urllib.parse import urlparse, quote
 import hashlib
 import time
 from datetime import datetime, timedelta
+from collections import OrderedDict
 import yaml
+
+
+class GGUFMetadataReader:
+    """Read metadata from GGUF model files"""
+    
+    # GGUF value type constants
+    GGUF_TYPE_UINT8   = 0
+    GGUF_TYPE_INT8    = 1
+    GGUF_TYPE_UINT16  = 2
+    GGUF_TYPE_INT16   = 3
+    GGUF_TYPE_UINT32  = 4
+    GGUF_TYPE_INT32   = 5
+    GGUF_TYPE_FLOAT32 = 6
+    GGUF_TYPE_BOOL    = 7
+    GGUF_TYPE_STRING  = 8
+    GGUF_TYPE_ARRAY   = 9
+    GGUF_TYPE_UINT64  = 10
+    GGUF_TYPE_INT64   = 11
+    GGUF_TYPE_FLOAT64 = 12
+    
+    def __init__(self, file_path: Path):
+        self.file_path = file_path
+        self.metadata = OrderedDict()
+    
+    def read_metadata(self) -> Dict[str, Any]:
+        """Read and parse GGUF metadata"""
+        try:
+            with open(self.file_path, 'rb') as f:
+                # Read header
+                magic = struct.unpack('<I', f.read(4))[0]
+                if magic != 0x46554747:  # 'GGUF' in little-endian
+                    raise ValueError(f"Invalid GGUF magic: {magic:08x}")
+                
+                version = struct.unpack('<I', f.read(4))[0]
+                if version < 2:
+                    raise ValueError(f"Unsupported GGUF version: {version}")
+                
+                tensor_count = struct.unpack('<Q', f.read(8))[0]
+                metadata_kv_count = struct.unpack('<Q', f.read(8))[0]
+                
+                self.metadata['_header'] = {
+                    'version': version,
+                    'tensor_count': tensor_count,
+                    'metadata_kv_count': metadata_kv_count
+                }
+                
+                # Read metadata key-value pairs
+                for _ in range(metadata_kv_count):
+                    key = self._read_string(f)
+                    value_type = struct.unpack('<I', f.read(4))[0]
+                    value = self._read_value(f, value_type)
+                    self.metadata[key] = value
+                
+                return self._extract_model_info()
+        
+        except Exception as e:
+            # Return minimal metadata on error
+            return {
+                'error': str(e),
+                'file': str(self.file_path),
+                'architecture': 'unknown'
+            }
+    
+    def _read_string(self, f) -> str:
+        """Read a GGUF string"""
+        length = struct.unpack('<Q', f.read(8))[0]
+        return f.read(length).decode('utf-8', errors='ignore')
+    
+    def _read_value(self, f, value_type: int) -> Any:
+        """Read a typed value"""
+        if value_type == self.GGUF_TYPE_UINT8:
+            return struct.unpack('B', f.read(1))[0]
+        elif value_type == self.GGUF_TYPE_INT8:
+            return struct.unpack('b', f.read(1))[0]
+        elif value_type == self.GGUF_TYPE_UINT16:
+            return struct.unpack('<H', f.read(2))[0]
+        elif value_type == self.GGUF_TYPE_INT16:
+            return struct.unpack('<h', f.read(2))[0]
+        elif value_type == self.GGUF_TYPE_UINT32:
+            return struct.unpack('<I', f.read(4))[0]
+        elif value_type == self.GGUF_TYPE_INT32:
+            return struct.unpack('<i', f.read(4))[0]
+        elif value_type == self.GGUF_TYPE_FLOAT32:
+            return struct.unpack('<f', f.read(4))[0]
+        elif value_type == self.GGUF_TYPE_BOOL:
+            return struct.unpack('B', f.read(1))[0] != 0
+        elif value_type == self.GGUF_TYPE_STRING:
+            return self._read_string(f)
+        elif value_type == self.GGUF_TYPE_ARRAY:
+            # Read array type and length
+            array_type = struct.unpack('<I', f.read(4))[0]
+            array_length = struct.unpack('<Q', f.read(8))[0]
+            # For now, skip array data
+            return f"[Array of {array_length} items]"
+        elif value_type == self.GGUF_TYPE_UINT64:
+            return struct.unpack('<Q', f.read(8))[0]
+        elif value_type == self.GGUF_TYPE_INT64:
+            return struct.unpack('<q', f.read(8))[0]
+        elif value_type == self.GGUF_TYPE_FLOAT64:
+            return struct.unpack('<d', f.read(8))[0]
+        else:
+            return f"[Unknown type {value_type}]"
+    
+    def _extract_model_info(self) -> Dict[str, Any]:
+        """Extract relevant model information from metadata"""
+        # Map file_type numbers to quantization names
+        quant_map = {
+            0: "F32", 1: "F16",
+            2: "Q4_0", 3: "Q4_1", 7: "Q8_0",
+            8: "Q5_0", 9: "Q5_1", 10: "Q2_K",
+            11: "Q3_K_S", 12: "Q3_K_M", 13: "Q3_K_L",
+            14: "Q4_K_S", 15: "Q4_K_M", 16: "Q5_K_S",
+            17: "Q5_K_M", 18: "Q6_K"
+        }
+        
+        file_type = self.metadata.get('general.file_type', -1)
+        quantization = quant_map.get(file_type, f"Unknown ({file_type})")
+        
+        info = {
+            'architecture': self.metadata.get('general.architecture', 'unknown'),
+            'name': self.metadata.get('general.name', 'unknown'),
+            'quantization': quantization,
+            'file_type': file_type,
+            'context_length': None,
+            'parameters': {}
+        }
+        
+        # Extract architecture-specific info
+        arch = info['architecture']
+        if arch in ['llama', 'mistral']:
+            info['context_length'] = self.metadata.get(f'{arch}.context_length')
+            info['parameters'] = {
+                'block_count': self.metadata.get(f'{arch}.block_count'),
+                'embedding_length': self.metadata.get(f'{arch}.embedding_length'),
+                'feed_forward_length': self.metadata.get(f'{arch}.feed_forward_length'),
+                'attention_heads': self.metadata.get(f'{arch}.attention.head_count'),
+                'attention_heads_kv': self.metadata.get(f'{arch}.attention.head_count_kv'),
+            }
+        
+        # Add file size
+        try:
+            info['file_size_gb'] = self.file_path.stat().st_size / (1024 ** 3)
+        except:
+            info['file_size_gb'] = 0
+        
+        return info
 
 
 class ModelManager:
@@ -58,6 +206,8 @@ class ModelManager:
         2. Environment variable AGENTYARD_MODELS_PATH
         3. Config file models_dir setting
         4. Default: ~/.agentyard/models/
+        
+        Models are stored in namespace/model folder structure.
         """
         # Check for per-model path in config
         if self.config:
@@ -65,18 +215,31 @@ class ModelManager:
             if 'path' in model_config:
                 return Path(os.path.expanduser(model_config['path']))
         
+        # Parse namespace and model from model_name
+        if '/' in model_name:
+            namespace, model = model_name.split('/', 1)
+        else:
+            # If no namespace provided, use 'default'
+            namespace = 'default'
+            model = model_name
+        
+        # Base directory resolution
+        base_dir = None
+        
         # Check environment variable
         env_path = os.environ.get('AGENTYARD_MODELS_PATH')
         if env_path:
-            return Path(os.path.expanduser(env_path)) / f"{model_name}.gguf"
-        
+            base_dir = Path(os.path.expanduser(env_path))
         # Check config file models_dir
-        if self.config and 'models_dir' in self.config:
-            models_dir = Path(os.path.expanduser(self.config['models_dir']))
-            return models_dir / f"{model_name}.gguf"
-        
+        elif self.config and 'models_dir' in self.config:
+            base_dir = Path(os.path.expanduser(self.config['models_dir']))
         # Default path
-        return Path.home() / ".agentyard" / "models" / f"{model_name}.gguf"
+        else:
+            base_dir = Path.home() / ".agentyard" / "models"
+        
+        # Return path in namespace/model structure
+        # Look for any .gguf file in the model directory
+        return base_dir / namespace / model
     
     def _get_system_specs(self) -> str:
         """Determine system capability level based on RAM and GPU"""
@@ -297,17 +460,21 @@ class ModelManager:
                 temp_path.unlink()
             return False
     
-    def validate_and_download_model(self, model_name: str) -> Tuple[bool, Path]:
+    def validate_and_download_model(self, model_name: str, force: bool = False) -> Tuple[bool, Path]:
         """
         Validate model exists and download if necessary
         Returns: (success, model_path)
         """
-        model_path = self.get_model_path(model_name)
+        model_dir = self.get_model_path(model_name)
         
-        # Check if model already exists
-        if model_path.exists():
-            print(f"✅ Model found at: {model_path}", file=sys.stderr)
-            return True, model_path
+        # Check if model directory exists and contains GGUF files
+        if model_dir.exists() and model_dir.is_dir():
+            gguf_files = list(model_dir.glob("*.gguf"))
+            if gguf_files:
+                # Use the first GGUF file found
+                model_path = gguf_files[0]
+                print(f"✅ Model found at: {model_path}", file=sys.stderr)
+                return True, model_path
         
         print(f"🔍 Model not found locally. Searching HuggingFace...", file=sys.stderr)
         
@@ -315,7 +482,7 @@ class ModelManager:
         model_info = self.query_huggingface_model(model_name)
         if not model_info:
             print(f"❌ Model '{model_name}' not found on HuggingFace", file=sys.stderr)
-            return False, model_path
+            return False, model_dir
         
         print(f"📦 Found model: {model_info.get('id', model_name)}", file=sys.stderr)
         
@@ -324,38 +491,48 @@ class ModelManager:
         if not gguf_files:
             print(f"❌ No GGUF files found for model '{model_name}'", file=sys.stderr)
             print("This model may not have GGUF format available.", file=sys.stderr)
-            return False, model_path
+            return False, model_dir
         
         # Recommend quantization
         recommended = self.recommend_quantization(gguf_files)
         if not recommended:
             print("❌ No suitable quantization found", file=sys.stderr)
-            return False, model_path
+            return False, model_dir
         
         print(f"\n🎯 Recommended: {recommended['filename']} ({recommended.get('size', 0) / (1024**3):.1f} GB)", file=sys.stderr)
         print(f"System capability: {self._get_system_specs()}", file=sys.stderr)
         
-        # Ask for confirmation
-        response = input("\nDownload this model? [Y/n]: ").strip().lower()
-        if response and response != 'y':
+        # Ask for confirmation if not forced and TTY is available
+        if not force and sys.stdin.isatty():
+            response = input("\nDownload this model? [Y/n]: ").strip().lower()
+            if response and response != 'y':
+                print("Download cancelled.", file=sys.stderr)
+                return False, model_dir
+        elif not force:
+            # Non-interactive mode, default to no
+            print("\nNon-interactive mode detected. Use --force to download automatically.", file=sys.stderr)
             print("Download cancelled.", file=sys.stderr)
-            return False, model_path
+            return False, model_dir
+        else:
+            print("\nForce mode enabled, downloading automatically...", file=sys.stderr)
         
         # Download the model
-        print(f"\n📥 Downloading to: {model_path}", file=sys.stderr)
-        if self.download_model(recommended['url'], model_path):
+        # Create the full path with the actual filename
+        model_file_path = model_dir / recommended['filename']
+        print(f"\n📥 Downloading to: {model_file_path}", file=sys.stderr)
+        if self.download_model(recommended['url'], model_file_path):
             print(f"✅ Model downloaded successfully!", file=sys.stderr)
-            return True, model_path
+            return True, model_file_path
         else:
-            return False, model_path
+            return False, model_file_path
 
 
 def create_default_config(config_path: Path, model_name: Optional[str] = None) -> Dict[str, Any]:
     """Create a default configuration file"""
+    default_model = model_name or "mistralai/mistral-small-2409"
     default_config = {
         "model": {
-            "name": model_name or "mistral-small-2409",
-            "path": f"~/.agentyard/models/{model_name or 'mistral-small-2409'}.gguf",
+            "name": default_model,
             "context_size": 32768,
             "gpu_layers": -1,  # Use all GPU layers
             "temperature": 0.1,
@@ -364,8 +541,9 @@ def create_default_config(config_path: Path, model_name: Optional[str] = None) -
         "models_dir": "~/.agentyard/models",
         "models": {
             # Per-model overrides can be added here
-            # "model-name": {
-            #     "path": "/custom/path/to/model.gguf"
+            # Example:
+            # "mistralai/mistral-7b": {
+            #     "path": "/custom/path/to/mistral-7b-model.gguf"
             # }
         },
         "review": {
