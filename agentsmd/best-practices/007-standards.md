@@ -137,10 +137,3 @@ File: progress/2025-07-01-10-15-00-add-progress-system.md
 - Don't reinvent the wheel. Use libraries and open source projects where possible. 
 - Make sure to use the latest stable version (don't assume your knowledge is accurate, search the web for the latest version). 
 
-## Key Technologies
-
-{{CLAUDE_PROMPT}}
-List the main technologies, frameworks, and languages used in this project as a bulleted list.
-Include version numbers if found in package files (package.json, requirements.txt, etc.).
-Group by category (Frontend, Backend, Testing, DevOps, etc.) if applicable.
-{{/CLAUDE_PROMPT}}
