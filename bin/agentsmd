@@ -293,18 +293,18 @@ run_claude_analysis() {
     mkdir -p "$(dirname "$cache_file")"
     echo "$output" > "$cache_file"
     echo "$output"
+    rm -f "$error_file"
+    return 0
   else
-    # Error - log and return placeholder
+    # Error - log and return error
     log_error "Claude Code failed after $MAX_RETRIES attempts"
     if [[ -s "$error_file" ]]; then
       log_error "Error details:"
       cat "$error_file" >&2
     fi
-    echo "[Claude analysis failed - see error log]"
+    rm -f "$error_file"
+    return 1
   fi
-  
-  rm -f "$error_file"
-  return $exit_code
 }
 
 # Process a migration file
@@ -325,7 +325,7 @@ process_migration() {
     local full_match="${BASH_REMATCH[0]}"
     local prompt="${BASH_REMATCH[1]}"
     
-    # Add content before the match
+    # Add content before the match (which doesn't include the {{CLAUDE_PROMPT}} marker)
     processed_content+="$before_match"
     
     # Trim whitespace from prompt
@@ -336,12 +336,17 @@ process_migration() {
     local cache_file=$(get_cache_path "$cache_key" "$project_path")
     
     # Change to project directory for Claude analysis
-    local result=$(cd "$project_path" && run_claude_analysis "$prompt" "$cache_key" "$cache_file")
+    local result
+    if ! result=$(cd "$project_path" && run_claude_analysis "$prompt" "$cache_key" "$cache_file"); then
+      log_error "Claude analysis failed for migration: $migration_name"
+      log_error "Stopping migration process to prevent incomplete AGENTS.md"
+      return 1
+    fi
     
-    # Add the result
+    # Add the result (without the prompt markers or the prompt itself)
     processed_content+="$result"
     
-    # Update remaining content
+    # Update remaining content to start after the closing marker
     remaining_content="${remaining_content#*{{/CLAUDE_PROMPT}}}"
   done
   
@@ -349,6 +354,7 @@ process_migration() {
   processed_content+="$remaining_content"
   
   echo "$processed_content"
+  return 0
 }
 
 # Read version file
@@ -482,7 +488,12 @@ main() {
     log "Applying migration: $(basename "$migration")"
     
     # Process the migration
-    local processed=$(process_migration "$migration" "$project_path")
+    local processed
+    if ! processed=$(process_migration "$migration" "$project_path"); then
+      log_error "Failed to process migration: $(basename "$migration")"
+      log_error "Aborting agentsmd to prevent incomplete AGENTS.md file"
+      exit 1
+    fi
     
     # Append to content
     if [[ -n "$agents_content" ]]; then
