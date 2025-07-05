@@ -1,5 +1,3 @@
-# Description: Development environment setup guide
-
 ## Development Setup
 
 {{CLAUDE_PROMPT}}

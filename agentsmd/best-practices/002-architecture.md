@@ -1,5 +1,3 @@
-# Description: Architecture and key patterns
-
 ## Architecture & Patterns
 
 {{CLAUDE_PROMPT}}

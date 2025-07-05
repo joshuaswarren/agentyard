@@ -1,5 +1,3 @@
-# Description: Key files and directories guide
-
 ## File Structure Roadmap
 
 {{CLAUDE_PROMPT}}

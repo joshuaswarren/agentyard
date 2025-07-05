@@ -1,5 +1,3 @@
-# Description: Guidelines for AI assistants working with this codebase
-
 ## AI Assistant Guidelines
 
 When working with code in this repository, please follow these guidelines:
