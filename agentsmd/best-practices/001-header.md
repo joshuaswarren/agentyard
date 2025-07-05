@@ -1,4 +1,3 @@
-# Description: Basic header and purpose statement
 # AGENTS.md
 
 This file provides guidance to AI coding assistants (Claude, Gemini, etc.) when working with code in this repository.

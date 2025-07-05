@@ -1,5 +1,3 @@
-# Description: Testing strategy and commands
-
 ## Testing Approach
 
 {{CLAUDE_PROMPT}}
