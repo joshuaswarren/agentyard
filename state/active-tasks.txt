@@ -1,0 +1,28 @@
+- session_name: agentyard-001
+  project: agentyard
+  branch: agents-file-creator
+  worktree_path: /Users/joshuawarren/work/agentyard-wt/001
+  creation_timestamp: 2025-07-05T19:17:34Z
+  log_file_path: /Users/joshuawarren/logs/agentyard/agentyard-001-agents-file-creator.log
+
+- session_name: deckard-011
+  project: deckard
+  branch: bugfix/github-703
+  worktree_path: /Users/joshuawarren/work/deckard-wt/011
+  creation_timestamp: 2025-07-05T20:46:38Z
+  log_file_path: /Users/joshuawarren/logs/deckard/deckard-011-bugfix_github-703.log
+
+- session_name: deckard-012
+  project: deckard
+  branch: bugfix/github-695
+  worktree_path: /Users/joshuawarren/work/deckard-wt/012
+  creation_timestamp: 2025-07-05T20:48:25Z
+  log_file_path: /Users/joshuawarren/logs/deckard/deckard-012-bugfix_github-695.log
+
+- session_name: deckard-013
+  project: deckard
+  branch: bugfix/github-696
+  worktree_path: /Users/joshuawarren/work/deckard-wt/013
+  creation_timestamp: 2025-07-05T20:49:04Z
+  log_file_path: /Users/joshuawarren/logs/deckard/deckard-013-bugfix_github-696.log
+
