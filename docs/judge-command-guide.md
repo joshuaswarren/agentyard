@@ -74,7 +74,7 @@ judge feature/new-login-system
 
 ### Use a Specific Model
 ```bash
-judge 45 --model mistral-small-2409
+judge 45 --model mistralai/mistral-small-2409
 ```
 
 ### Use a Custom Configuration
@@ -82,13 +82,23 @@ judge 45 --model mistral-small-2409
 judge 45 --config ~/my-judge-config.yaml
 ```
 
+### Non-Interactive Mode
+```bash
+# Skip all confirmations (useful for CI/scripts)
+judge 45 --force
+judge --init-config --force
+```
+
 ### Create a Configuration File
 ```bash
-# Create default config in current directory
+# Create default config
 judge --init-config
 
-# Create config at specific location
-judge --init-config ~/custom-judge.yaml
+# Create config with force mode (skip confirmations)
+judge --init-config --force
+
+# Scan for existing models and update config
+judge scan-models
 ```
 
 ## Configuration
@@ -99,16 +109,18 @@ Judge uses a YAML configuration file located at `~/.agentyard/judge.yaml` by def
 
 Judge resolves model paths in the following order:
 1. **Per-model path** in config file (highest priority)
-2. **Environment variable**: `$AGENTYARD_MODELS_PATH/<model>.gguf`
+2. **Environment variable**: `$AGENTYARD_MODELS_PATH/<namespace>/<model>/`
 3. **Config file setting**: `models_dir` value
-4. **Default**: `~/.agentyard/models/<model>.gguf`
+4. **Default**: `~/.agentyard/models/<namespace>/<model>/`
+
+Models are stored in a namespace/model folder structure (e.g., `mistralai/mistral-7b/`).
 
 ### Basic Configuration
 ```yaml
 # Judge AI PR Reviewer Configuration
 
 model:
-  name: "mistral-small-2409"
+  name: "mistralai/mistral-small-2409"
   context_size: 32768
   gpu_layers: -1  # Use all GPU layers on Metal
   temperature: 0.1
@@ -119,7 +131,7 @@ models_dir: "~/.agentyard/models"
 
 # Per-model overrides (optional)
 models:
-  "codellama-7b":
+  "meta/codellama-7b":
     path: "/custom/path/to/codellama.gguf"
 
 review:
@@ -133,19 +145,35 @@ github:
 
 ### Model Management
 
+#### Model Discovery
+Judge can scan for existing models in multiple locations:
+
+```bash
+# Scan for models and update configuration
+judge scan-models
+```
+
+This will:
+- Scan `$AGENTYARD_MODELS_PATH`, `~/.agentyard/models/`, and LM Studio paths
+- Parse GGUF metadata (architecture, quantization, size)
+- Update your configuration with discovered models
+- Create a metadata cache for faster access
+- Remove old flat model entries (non-namespace format)
+
 #### Automatic Model Download
 Judge can automatically download models from HuggingFace:
 
 1. **Run judge with any model name**:
    ```bash
-   judge 45 --model mistralai/Mistral-7B-Instruct-v0.2
+   judge 45 --model mistralai/mistral-7b
    ```
 
 2. **Judge will**:
    - Search HuggingFace for GGUF versions
    - Detect your system specs (RAM, GPU)
    - Recommend the best quantization
-   - Download with progress indicator
+   - Download to the namespace/model structure
+   - Use `--force` to skip download confirmation
 
 #### Manual Model Setup
 1. **Download a Model**: 
@@ -158,12 +186,36 @@ Judge can automatically download models from HuggingFace:
 
 2. **Configure Model Path**:
    ```bash
-   # Option 1: Environment variable
+   # Option 1: Environment variable (models organized by namespace)
    export AGENTYARD_MODELS_PATH="/path/to/models"
+   # Expected structure: $AGENTYARD_MODELS_PATH/mistralai/mistral-7b/*.gguf
    
    # Option 2: Edit config file
    # Add to models section for specific model
    ```
+
+#### Model Storage Structure
+Models are organized in namespace/model folders:
+```
+~/.agentyard/models/
+├── mistralai/
+│   ├── mistral-7b/
+│   │   └── mistral-7b-instruct-v0.2.Q4_K_M.gguf
+│   └── mistral-small-2409/
+│       └── mistral-small-2409-Q4_K_M.gguf
+├── meta/
+│   └── llama-3-8b/
+│       └── Meta-Llama-3-8B-Instruct-Q4_K_M.gguf
+└── .cache/
+    └── model_metadata.json  # Cached GGUF metadata
+```
+
+#### LM Studio Compatibility
+Judge automatically scans LM Studio model directories:
+- `~/.cache/lm-studio/models/` (primary location)
+- `~/.lmstudio/models/` (alternative location)
+
+LM Studio models follow the same namespace/model structure and are automatically discovered by `judge scan-models`.
 
 ### Performance Tuning
 

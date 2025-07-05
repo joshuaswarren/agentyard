@@ -33,8 +33,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Default configuration
 DEFAULT_CONFIG="$HOME/.agentyard/judge.yaml"
-DEFAULT_MODEL="mistral-small-2409"
+DEFAULT_MODEL="mistralai/mistral-small-2409"
 MAX_DIFF_LINES=1000
+FORCE_MODE=false
 
 # Colors for output
 RED='\033[0;31m'
@@ -47,6 +48,7 @@ usage() {
   cat <<EOF
 Usage: $prog <pr> [options]
        $prog --init-config
+       $prog scan-models
 
   pr        PR number or branch name
 
@@ -54,21 +56,24 @@ Options:
   --model MODEL      Use specific model (default: from config)
   --config FILE      Use custom config file (default: ~/.agentyard/judge.yaml)
   --init-config      Create default config file and exit
+  scan-models        Scan model directories and update config
+  --force            Skip all confirmations (non-interactive mode)
   -h, --help         Show this help message
 
 Examples:
   $prog 45                           # Review PR #45
   $prog feature/new-login            # Review PR by branch name
-  $prog 45 --model mistral-small     # Use specific model
+  $prog 45 --model mistralai/mistral-7b  # Use specific model
   $prog --init-config                # Create default configuration
+  $prog scan-models                  # Scan for models and update config
 
 Configuration:
   Default config file: ~/.agentyard/judge.yaml
   Model path resolution (in order):
     1. Per-model path in config
-    2. \$AGENTYARD_MODELS_PATH/<model>.gguf
+    2. \$AGENTYARD_MODELS_PATH/<namespace>/<model>/
     3. Config models_dir setting
-    4. ~/.agentyard/models/<model>.gguf
+    4. ~/.agentyard/models/<namespace>/<model>/
 EOF
 }
 
@@ -78,13 +83,17 @@ if [[ $# -eq 0 || ${1:-} == "-h" || ${1:-} == "--help" ]]; then
   exit 0
 fi
 
-# Handle --init-config separately
+# Handle --init-config and scan-models separately
 if [[ ${1:-} == "--init-config" ]]; then
   init_config=true
   shift
   config_file="${1:-$DEFAULT_CONFIG}"
+elif [[ ${1:-} == "scan-models" ]]; then
+  scan_models=true
+  shift
 else
   init_config=false
+  scan_models=false
   pr_input=$1
   shift
 fi
@@ -101,6 +110,10 @@ while [[ $# -gt 0 ]]; do
     --config)
       config_file="$2"
       shift 2
+      ;;
+    --force)
+      FORCE_MODE=true
+      shift
       ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -177,7 +190,7 @@ if [[ "$init_config" == "true" ]]; then
   # Add Python path for our modules
   export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
   
-  python3 - "$config_file" <<'EOF'
+  python3 - "$config_file" "$FORCE_MODE" <<'EOF'
 import sys
 import os
 import yaml
@@ -188,8 +201,16 @@ config_path = Path(sys.argv[1])
 
 # Check if config already exists
 if config_path.exists():
-    response = input(f"Config file already exists at {config_path}. Overwrite? [y/N]: ").strip().lower()
-    if response != 'y':
+    force_mode = sys.argv[2] if len(sys.argv) > 2 else "false"
+    if force_mode == "true":
+        print(f"Force mode enabled. Overwriting existing config at {config_path}.")
+    elif sys.stdin.isatty():
+        response = input(f"Config file already exists at {config_path}. Overwrite? [y/N]: ").strip().lower()
+        if response != 'y':
+            print("Configuration creation cancelled.")
+            sys.exit(0)
+    else:
+        print(f"Config file already exists at {config_path}. Use --force to overwrite.")
         print("Configuration creation cancelled.")
         sys.exit(0)
 
@@ -204,12 +225,229 @@ with open(config_path, 'w') as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
 print(f"✅ Configuration created at: {config_path}")
-print("\nDefault model: mistral-small-2409")
+print(f"\nDefault model: {config['model']['name']}")
 print(f"Models directory: {config['models_dir']}")
 print("\nYou can now:")
 print("  1. Set AGENTYARD_MODELS_PATH environment variable")
 print("  2. Edit the config to set custom model paths")
 print("  3. Run 'judge <pr>' to review a pull request")
+EOF
+  exit $?
+fi
+
+# ---- Handle scan-models -----------------------------------------------------
+if [[ "$scan_models" == "true" ]]; then
+  echo "🔍 Scanning for models..."
+  
+  # Create config file if it doesn't exist
+  if [[ ! -f "$config_file" ]]; then
+    echo "Creating default configuration at $config_file..."
+    mkdir -p "$(dirname "$config_file")"
+    
+    # Add Python path for our modules
+    export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
+    
+    python3 -c "
+import yaml
+from pathlib import Path
+from judge.model_manager import create_default_config
+
+config_path = Path('$config_file')
+config_path.parent.mkdir(parents=True, exist_ok=True)
+config = create_default_config(config_path)
+
+with open(config_path, 'w') as f:
+    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+print(f'✅ Configuration created at: {config_path}')
+"
+  fi
+  
+  # Add Python path for our modules
+  export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
+  
+  # Run the model scanner
+  python3 - "$config_file" <<'EOF'
+import sys
+import os
+import json
+import yaml
+from pathlib import Path
+from glob import glob
+from judge.model_manager import ModelManager
+
+config_path = Path(sys.argv[1])
+
+# Load existing config
+with open(config_path, 'r') as f:
+    config = yaml.safe_load(f) or {}
+
+# Initialize paths to scan
+scan_paths = []
+
+# 1. Environment variable (highest priority)
+env_path = os.environ.get('AGENTYARD_MODELS_PATH')
+if env_path:
+    scan_paths.append(Path(os.path.expanduser(env_path)))
+
+# 2. Config models_dir
+if 'models_dir' in config:
+    scan_paths.append(Path(os.path.expanduser(config['models_dir'])))
+
+# 3. Default path
+scan_paths.append(Path.home() / ".agentyard" / "models")
+
+# 4. LM Studio paths
+lm_studio_paths = [
+    Path.home() / ".cache" / "lm-studio" / "models",
+    Path("~/.lmstudio/models").expanduser()
+]
+for path in lm_studio_paths:
+    if path.exists():
+        scan_paths.append(path)
+
+# Remove duplicates while preserving order
+seen = set()
+unique_paths = []
+for path in scan_paths:
+    if path not in seen:
+        seen.add(path)
+        unique_paths.append(path)
+
+print(f"📂 Scanning directories:")
+for path in unique_paths:
+    print(f"   - {path}")
+
+# Import metadata reader
+from judge.model_manager import GGUFMetadataReader
+
+# Scan for models
+discovered_models = {}
+metadata_cache = {}
+total_found = 0
+
+for base_path in unique_paths:
+    if not base_path.exists():
+        continue
+    
+    # Look for namespace/model structure
+    for namespace_dir in base_path.iterdir():
+        if not namespace_dir.is_dir():
+            continue
+            
+        for model_dir in namespace_dir.iterdir():
+            if not model_dir.is_dir():
+                continue
+                
+            # Look for GGUF files
+            gguf_files = list(model_dir.glob("*.gguf"))
+            # Also check for safetensors files (LM Studio format)
+            safetensors_files = list(model_dir.glob("*.safetensors"))
+            
+            model_files = gguf_files + safetensors_files
+            
+            if model_files:
+                model_name = f"{namespace_dir.name}/{model_dir.name}"
+                
+                # Use the first model file found
+                model_file = model_files[0]
+                
+                # Skip if already in config with custom path
+                if model_name in config.get('models', {}) and 'path' in config['models'][model_name]:
+                    print(f"⏭️  Skipping {model_name} (custom path already configured)")
+                    continue
+                
+                discovered_models[model_name] = {
+                    'path': str(model_file),
+                    'directory': str(model_dir),
+                    'files': [f.name for f in model_files]
+                }
+                
+                # Try to read GGUF metadata
+                if model_file.suffix == '.gguf':
+                    try:
+                        reader = GGUFMetadataReader(model_file)
+                        metadata = reader.read_metadata()
+                        metadata_cache[model_name] = metadata
+                        quant = metadata.get('quantization', 'Unknown')
+                        size_gb = metadata.get('file_size_gb', 0)
+                        print(f"✅ Found {model_name} ({quant}, {size_gb:.1f}GB)")
+                    except Exception as e:
+                        print(f"✅ Found {model_name} (metadata read failed: {e})")
+                else:
+                    # For safetensors, just note it was found
+                    size_gb = model_file.stat().st_size / (1024 ** 3)
+                    print(f"✅ Found {model_name} (safetensors, {size_gb:.1f}GB)")
+                    metadata_cache[model_name] = {
+                        'file_type': 'safetensors',
+                        'file_size_gb': size_gb,
+                        'architecture': 'unknown'
+                    }
+                
+                total_found += 1
+
+print(f"\n📊 Found {total_found} models")
+
+if total_found > 0:
+    # Update config with discovered models
+    if 'models' not in config:
+        config['models'] = {}
+    
+    # Remove old flat models that don't follow namespace/model pattern
+    old_models = []
+    for model_name in list(config['models'].keys()):
+        if '/' not in model_name:
+            old_models.append(model_name)
+    
+    if old_models:
+        print(f"\n🧹 Removing {len(old_models)} old flat model entries:")
+        for model in old_models:
+            print(f"   - {model}")
+            del config['models'][model]
+    
+    # Add discovered models
+    for model_name, model_info in discovered_models.items():
+        if model_name not in config['models']:
+            config['models'][model_name] = {}
+        # Note: We don't set the path here since the model manager
+        # will find it automatically using the namespace/model structure
+    
+    # Write updated config
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    
+    # Write metadata cache
+    cache_dir = config_path.parent / '.cache'
+    cache_dir.mkdir(exist_ok=True)
+    metadata_cache_file = cache_dir / 'model_metadata.json'
+    
+    # Load existing cache if it exists
+    existing_cache = {}
+    if metadata_cache_file.exists():
+        try:
+            with open(metadata_cache_file, 'r') as f:
+                existing_cache = json.load(f)
+        except:
+            pass
+    
+    # Merge with new metadata
+    existing_cache.update(metadata_cache)
+    
+    # Write updated cache
+    with open(metadata_cache_file, 'w') as f:
+        json.dump(existing_cache, f, indent=2)
+    
+    print(f"\n✅ Updated configuration at: {config_path}")
+    print(f"✅ Updated metadata cache at: {metadata_cache_file}")
+    print("\nDiscovered models:")
+    for model_name in sorted(discovered_models.keys()):
+        metadata = metadata_cache.get(model_name, {})
+        quant = metadata.get('quantization', 'Unknown')
+        size = metadata.get('file_size_gb', 0)
+        print(f"  - {model_name} ({quant}, {size:.1f}GB)")
+else:
+    print("\nNo models found. Make sure models are stored in namespace/model folder structure.")
+    print("Example: ~/.agentyard/models/mistralai/mistral-7b/mistral-7b-instruct-v0.2.Q4_K_M.gguf")
+
 EOF
   exit $?
 fi
@@ -262,20 +500,21 @@ else
 import yaml
 with open('$config_file', 'r') as f:
     config = yaml.safe_load(f)
-    print(config.get('model', {}).get('name', 'mistral-small-2409'))
-" 2>/dev/null || echo "mistral-small-2409")
+    print(config.get('model', {}).get('name', 'mistralai/mistral-small-2409'))
+" 2>/dev/null || echo "mistralai/mistral-small-2409")
 fi
 
 # Validate and download model if needed
-python3 - "$config_file" "$model_name" <<'EOF' || exit 1
+python3 - "$config_file" "$model_name" "$FORCE_MODE" <<'EOF' || exit 1
 import sys
 from judge.model_manager import ModelManager
 
 config_path = sys.argv[1]
 model_name = sys.argv[2]
+force_mode = sys.argv[3] == "true"
 
 manager = ModelManager(config_path)
-success, model_path = manager.validate_and_download_model(model_name)
+success, model_path = manager.validate_and_download_model(model_name, force=force_mode)
 
 if not success:
     print(f"❌ Failed to validate/download model: {model_name}")
@@ -396,15 +635,22 @@ def run_review(config_path: str, pr_data_json: str, diff_content: str,
         model_config = config.get('model', {})
         
         # Determine model name
-        model_name = model_override or model_config.get('name', 'mistral-small-2409')
+        model_name = model_override or model_config.get('name', 'mistralai/mistral-small-2409')
         
         # Use ModelManager to get model path
         manager = ModelManager(config_path)
-        model_path = manager.get_model_path(model_name)
+        model_dir = manager.get_model_path(model_name)
         
-        # Verify model exists (should already be validated by main script)
-        if not model_path.exists():
-            print(f"Error: Model file not found at {model_path}", file=sys.stderr)
+        # Find the GGUF file in the model directory
+        if model_dir.exists() and model_dir.is_dir():
+            gguf_files = list(model_dir.glob("*.gguf"))
+            if gguf_files:
+                model_path = gguf_files[0]  # Use the first GGUF file found
+            else:
+                print(f"Error: No GGUF files found in {model_dir}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print(f"Error: Model directory not found at {model_dir}", file=sys.stderr)
             print("The model should have been validated earlier. Please check your setup.", file=sys.stderr)
             sys.exit(1)
         
