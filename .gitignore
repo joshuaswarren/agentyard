@@ -1,2 +1,4 @@
 tmuxp/private/
 bin/jump*
+lib/judge/__pycache__
+state/active_tasks.txt
