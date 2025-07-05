@@ -1,0 +1,501 @@
+#!/usr/bin/env bash
+#
+# agentsmd  –  manage AGENTS.md files with migration-style best practices
+#
+# Usage:  agentsmd [options]
+#
+# The script:
+#   • Creates symlinks for CLAUDE.md and GEMINI.md pointing to AGENTS.md
+#   • Generates or updates AGENTS.md files with versioned best practices
+#   • Uses Claude Code to analyze repositories for project-specific content
+#   • Tracks applied migrations in .agentyard-version.yml
+#   • Caches analysis results for performance
+#
+# Dependencies: claude (Claude Code CLI), git, yq (YAML processor)
+#
+set -euo pipefail
+
+prog=$(basename "$0")
+
+# Configuration
+# Determine if we're in development (agentyard repo) or production
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -d "${SCRIPT_DIR}/../agentsmd" ]]; then
+  # Development mode - use local agentsmd directory
+  AGENTSMD_ROOT="${SCRIPT_DIR}/../agentsmd"
+else
+  # Production mode - use ~/agentyard/agentsmd
+  AGENTSMD_ROOT="${HOME}/agentyard/agentsmd"
+fi
+
+BEST_PRACTICES_DIR="${AGENTSMD_ROOT}/best-practices"
+CACHE_DIR="${AGENTSMD_ROOT}/cache"
+TEMPLATES_DIR="${AGENTSMD_ROOT}/templates"
+LIB_DIR="${AGENTSMD_ROOT}/lib"
+
+# Default options
+PROJECT_DIR="."
+CHECK_ONLY=false
+VERBOSE=false
+NO_CACHE=false
+LIST_MIGRATIONS=false
+CLAUDE_MODEL="sonnet"
+TIMEOUT=60
+MAX_RETRIES=2
+SHOW_PROMPTS=false
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+usage() {
+  cat <<EOF
+Usage: $prog [options]
+
+Manage AGENTS.md files with migration-style best practices
+
+Options:
+  -h, --help              Show this help message
+  -c, --check-only        Preview what would be done without making changes
+  -v, --verbose           Show detailed progress
+  -n, --no-cache          Force fresh Claude analysis
+  -p, --project <path>    Target specific directory (default: current)
+  -l, --list-migrations   Show all available migrations
+  -m, --model <model>     Claude model to use (default: sonnet)
+  -t, --timeout <secs>    Timeout per Claude call (default: 60)
+  -r, --max-retries <n>   Max retry attempts (default: 2)
+  -s, --show-prompts      Show prompts being sent to Claude
+
+Examples:
+  $prog                    # Basic usage in current directory
+  $prog --check-only       # Preview changes
+  $prog --project ~/work/myapp --verbose
+  $prog --list-migrations
+
+EOF
+}
+
+# ---- Parse command line arguments --------------------------------------------
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -c|--check-only)
+      CHECK_ONLY=true
+      shift
+      ;;
+    -v|--verbose)
+      VERBOSE=true
+      shift
+      ;;
+    -n|--no-cache)
+      NO_CACHE=true
+      shift
+      ;;
+    -p|--project)
+      PROJECT_DIR="$2"
+      shift 2
+      ;;
+    -l|--list-migrations)
+      LIST_MIGRATIONS=true
+      shift
+      ;;
+    -m|--model)
+      CLAUDE_MODEL="$2"
+      shift 2
+      ;;
+    -t|--timeout)
+      TIMEOUT="$2"
+      shift 2
+      ;;
+    -r|--max-retries)
+      MAX_RETRIES="$2"
+      shift 2
+      ;;
+    -s|--show-prompts)
+      SHOW_PROMPTS=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# ---- Helper functions --------------------------------------------------------
+
+log() {
+  echo -e "${BLUE}[agentsmd]${NC} $*"
+}
+
+log_verbose() {
+  if [[ "$VERBOSE" == "true" ]]; then
+    echo -e "${BLUE}[agentsmd]${NC} $*"
+  fi
+}
+
+log_error() {
+  echo -e "${RED}[agentsmd ERROR]${NC} $*" >&2
+}
+
+log_success() {
+  echo -e "${GREEN}[agentsmd]${NC} $*"
+}
+
+log_warning() {
+  echo -e "${YELLOW}[agentsmd]${NC} $*"
+}
+
+# Check if a command exists
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Ensure required directories exist
+ensure_directories() {
+  mkdir -p "$BEST_PRACTICES_DIR"
+  mkdir -p "$CACHE_DIR"
+  mkdir -p "$TEMPLATES_DIR"
+  mkdir -p "$LIB_DIR"
+}
+
+# List available migrations
+list_migrations() {
+  log "Available migrations:"
+  if [[ -d "$BEST_PRACTICES_DIR" ]]; then
+    for migration in "$BEST_PRACTICES_DIR"/*.md; do
+      if [[ -f "$migration" ]]; then
+        basename=$(basename "$migration")
+        # Extract description from first comment line if present
+        desc=$(grep -m1 '^# Description:' "$migration" 2>/dev/null | sed 's/# Description: //' || echo "")
+        printf "  %-30s %s\n" "$basename" "$desc"
+      fi
+    done
+  else
+    log_error "No migrations directory found at $BEST_PRACTICES_DIR"
+  fi
+}
+
+# Get project absolute path
+get_project_path() {
+  if [[ ! -d "$PROJECT_DIR" ]]; then
+    log_error "Project directory does not exist: $PROJECT_DIR"
+    exit 1
+  fi
+  echo "$(cd "$PROJECT_DIR" && pwd)"
+}
+
+# Generate cache key for a prompt
+generate_cache_key() {
+  local prompt="$1"
+  local project_path="$2"
+  
+  # Get git commit hash if in git repo
+  local git_hash="no-git"
+  if [[ -d "$project_path/.git" ]]; then
+    git_hash=$(cd "$project_path" && git rev-parse HEAD 2>/dev/null || echo "no-git")
+  fi
+  
+  # Get key file timestamps
+  local key_files=""
+  if command_exists find && command_exists stat && command_exists md5sum; then
+    key_files=$(cd "$project_path" && \
+      find . -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "package.json" | \
+      head -20 | \
+      xargs stat -c "%Y" 2>/dev/null | \
+      sort | \
+      md5sum | \
+      cut -d' ' -f1 || echo "no-files")
+  fi
+  
+  # Combine into cache key
+  local prompt_hash=$(echo -n "$prompt" | md5sum | cut -d' ' -f1)
+  echo "${prompt_hash:0:8}-${git_hash:0:8}-${key_files:0:8}-${CLAUDE_MODEL}"
+}
+
+# Get cache file path
+get_cache_path() {
+  local cache_key="$1"
+  local project_name=$(basename "$2")
+  echo "$CACHE_DIR/${project_name}/${cache_key}.txt"
+}
+
+# Run Claude Code analysis
+run_claude_analysis() {
+  local prompt="$1"
+  local cache_key="$2"
+  local cache_file="$3"
+  
+  if [[ "$SHOW_PROMPTS" == "true" ]]; then
+    log_verbose "Claude prompt:"
+    echo "$prompt" | sed 's/^/  /'
+  fi
+  
+  # Check cache first
+  if [[ "$NO_CACHE" == "false" && -f "$cache_file" ]]; then
+    log_verbose "Using cached result: $cache_file"
+    cat "$cache_file"
+    return 0
+  fi
+  
+  # Ensure Claude Code is available
+  if ! command_exists claude; then
+    log_error "Claude Code CLI not found. Please install it first."
+    echo "[Claude Code not available - analysis skipped]"
+    return 1
+  fi
+  
+  log_verbose "Running Claude analysis..."
+  
+  local output=""
+  local exit_code=0
+  local retry_count=0
+  local error_file=$(mktemp)
+  
+  # Retry loop with exponential backoff
+  while [[ $retry_count -lt $MAX_RETRIES ]]; do
+    # Execute Claude Code with timeout
+    if output=$(timeout "$TIMEOUT" claude --print --dangerously-skip-permissions --output-format text --model "$CLAUDE_MODEL" "$prompt" 2>"$error_file"); then
+      exit_code=0
+      break
+    else
+      exit_code=$?
+      retry_count=$((retry_count + 1))
+      
+      if [[ $retry_count -lt $MAX_RETRIES ]]; then
+        local wait_time=$((2 ** retry_count))
+        log_warning "Claude analysis failed (attempt $retry_count/$MAX_RETRIES), retrying in ${wait_time}s..."
+        sleep "$wait_time"
+      fi
+    fi
+  done
+  
+  if [[ $exit_code -eq 0 && -n "$output" ]]; then
+    # Success - save to cache
+    mkdir -p "$(dirname "$cache_file")"
+    echo "$output" > "$cache_file"
+    echo "$output"
+  else
+    # Error - log and return placeholder
+    log_error "Claude Code failed after $MAX_RETRIES attempts"
+    if [[ -s "$error_file" ]]; then
+      log_error "Error details:"
+      cat "$error_file" >&2
+    fi
+    echo "[Claude analysis failed - see error log]"
+  fi
+  
+  rm -f "$error_file"
+  return $exit_code
+}
+
+# Process a migration file
+process_migration() {
+  local migration_file="$1"
+  local project_path="$2"
+  local migration_name=$(basename "$migration_file")
+  
+  log_verbose "Processing migration: $migration_name"
+  
+  local content=$(cat "$migration_file")
+  local processed_content=""
+  local remaining_content="$content"
+  
+  # Process all Claude prompts in the migration
+  while [[ "$remaining_content" =~ \{\{CLAUDE_PROMPT\}\}([^\{]*)\{\{/CLAUDE_PROMPT\}\} ]]; do
+    local before_match="${remaining_content%%{{CLAUDE_PROMPT}}*}"
+    local full_match="${BASH_REMATCH[0]}"
+    local prompt="${BASH_REMATCH[1]}"
+    
+    # Add content before the match
+    processed_content+="$before_match"
+    
+    # Trim whitespace from prompt
+    prompt=$(echo "$prompt" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    # Generate cache key and run analysis
+    local cache_key=$(generate_cache_key "$prompt" "$project_path")
+    local cache_file=$(get_cache_path "$cache_key" "$project_path")
+    
+    # Change to project directory for Claude analysis
+    local result=$(cd "$project_path" && run_claude_analysis "$prompt" "$cache_key" "$cache_file")
+    
+    # Add the result
+    processed_content+="$result"
+    
+    # Update remaining content
+    remaining_content="${remaining_content#*{{/CLAUDE_PROMPT}}}"
+  done
+  
+  # Add any remaining content
+  processed_content+="$remaining_content"
+  
+  echo "$processed_content"
+}
+
+# Read version file
+read_version_file() {
+  local version_file="$1"
+  
+  if [[ ! -f "$version_file" ]]; then
+    echo "0"
+    return
+  fi
+  
+  # Use yq if available, otherwise parse manually
+  if command_exists yq; then
+    yq eval '.agentsmd.version // 0' "$version_file" 2>/dev/null || echo "0"
+  else
+    grep -m1 'version:' "$version_file" 2>/dev/null | sed 's/.*version:[[:space:]]*//' || echo "0"
+  fi
+}
+
+# Write version file
+write_version_file() {
+  local version_file="$1"
+  local version="$2"
+  local cache_key="$3"
+  
+  cat > "$version_file" <<EOF
+# Agentyard version tracking
+agentsmd:
+  version: $version
+  applied_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cache_key: "$cache_key"
+EOF
+}
+
+# Create symlink if it doesn't exist
+create_symlink() {
+  local source="$1"
+  local target="$2"
+  
+  if [[ -L "$target" ]]; then
+    log_verbose "Symlink already exists: $target -> $(readlink "$target")"
+  elif [[ -e "$target" ]]; then
+    log_warning "File exists but is not a symlink: $target"
+  else
+    if [[ "$CHECK_ONLY" == "true" ]]; then
+      log "Would create symlink: $target -> $source"
+    else
+      ln -s "$source" "$target"
+      log_success "Created symlink: $target -> $source"
+    fi
+  fi
+}
+
+# Main function
+main() {
+  # Handle list migrations
+  if [[ "$LIST_MIGRATIONS" == "true" ]]; then
+    list_migrations
+    exit 0
+  fi
+  
+  # Ensure directories exist
+  ensure_directories
+  
+  # Get project path
+  local project_path
+  if ! project_path=$(get_project_path); then
+    exit 1
+  fi
+  log "Working in: $project_path"
+  
+  # Paths for agent files
+  local agents_file="$project_path/AGENTS.md"
+  local claude_file="$project_path/CLAUDE.md"
+  local gemini_file="$project_path/GEMINI.md"
+  local version_file="$project_path/.agentyard-version.yml"
+  
+  # Create symlinks
+  create_symlink "AGENTS.md" "$claude_file"
+  create_symlink "AGENTS.md" "$gemini_file"
+  
+  # Read current version
+  local current_version=$(read_version_file "$version_file")
+  log_verbose "Current version: $current_version"
+  
+  # Get available migrations
+  local migrations=()
+  if [[ -d "$BEST_PRACTICES_DIR" ]]; then
+    while IFS= read -r -d '' file; do
+      migrations+=("$file")
+    done < <(find "$BEST_PRACTICES_DIR" -name "*.md" -type f -print0 | sort -z)
+  fi
+  
+  if [[ ${#migrations[@]} -eq 0 ]]; then
+    log_warning "No migration files found in $BEST_PRACTICES_DIR"
+    exit 0
+  fi
+  
+  # Determine which migrations to apply
+  local migrations_to_apply=()
+  for migration in "${migrations[@]}"; do
+    local migration_number=$(basename "$migration" | grep -o '^[0-9]\+' || echo "0")
+    if [[ $migration_number -gt $current_version ]]; then
+      migrations_to_apply+=("$migration")
+    fi
+  done
+  
+  if [[ ${#migrations_to_apply[@]} -eq 0 ]]; then
+    log "No new migrations to apply (current version: $current_version)"
+    exit 0
+  fi
+  
+  log "Found ${#migrations_to_apply[@]} new migration(s) to apply"
+  
+  # Check only mode
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    log "Migrations that would be applied:"
+    for migration in "${migrations_to_apply[@]}"; do
+      echo "  - $(basename "$migration")"
+    done
+    exit 0
+  fi
+  
+  # Apply migrations
+  local agents_content=""
+  if [[ -f "$agents_file" ]]; then
+    agents_content=$(cat "$agents_file")
+  fi
+  
+  for migration in "${migrations_to_apply[@]}"; do
+    log "Applying migration: $(basename "$migration")"
+    
+    # Process the migration
+    local processed=$(process_migration "$migration" "$project_path")
+    
+    # Append to content
+    if [[ -n "$agents_content" ]]; then
+      agents_content+="\n\n"
+    fi
+    agents_content+="$processed"
+    
+    # Update version
+    local migration_number=$(basename "$migration" | grep -o '^[0-9]\+' || echo "0")
+    current_version=$migration_number
+  done
+  
+  # Write AGENTS.md
+  echo -e "$agents_content" > "$agents_file"
+  log_success "Updated $agents_file"
+  
+  # Update version file
+  local cache_key=$(generate_cache_key "version" "$project_path")
+  write_version_file "$version_file" "$current_version" "$cache_key"
+  log_success "Updated version to $current_version"
+  
+  log_success "Done! AGENTS.md is now up to date."
+}
+
+# ---- Main execution ----------------------------------------------------------
+
+main
