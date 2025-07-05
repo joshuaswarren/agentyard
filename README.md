@@ -38,6 +38,8 @@ sync-active-tasks                           # sync active tasks file with actual
 judge 45                                    # AI-powered review of PR #45 using local LLM
 judge scan-models                           # Scan for models and update configuration  
 /plan "implement feature X"                 # Interactive planning with codebase analysis
+agentsmd                                    # Create/update AGENTS.md with AI analysis
+create-agents-file claude                   # Create CLAUDE.md file for AI assistance
 mentor                                      # AI-powered code review of recent commits using OpenAI
 
 ## New Features
@@ -100,6 +102,32 @@ mentor                                      # AI-powered code review of recent c
   - `mentor abc123def` - Review specific commit
   - `mentor abc123 def456` - Review commit range
   - `mentor --model gpt-4` - Use specific model origin/main
+
+### AI Agent Instruction Files with create-agents-file
+- **Quick Generation**: Create CLAUDE.md or GEMINI.md files for AI coding assistants
+- **Multiple Templates**: Choose from basic, full, or custom interactive templates
+- **Project Context**: Helps AI understand your architecture, conventions, and requirements
+- **Dry Run Mode**: Preview generated content before creating files
+- **Flexible Options**: Specify project directory, overwrite existing files
+- **Usage Examples**:
+  - `create-agents-file claude` - Create basic CLAUDE.md in current directory
+  - `create-agents-file gemini --template full` - Create comprehensive GEMINI.md
+  - `create-agents-file claude --project ~/work/myapp --overwrite` - Create in specific project
+- See [Create Agents File Guide](docs/create-agents-file-guide.md) for detailed usage
+
+### AI-Powered AGENTS.md Management with agentsmd
+- **Migration System**: Uses numbered best practice files that apply in order
+- **Claude Analysis**: Automatically analyzes your codebase for project-specific content
+- **Version Tracking**: Prevents duplicate migrations with `.agentyard-version.yml`
+- **Smart Caching**: Caches Claude analysis results with automatic invalidation
+- **Symlink Management**: Creates CLAUDE.md and GEMINI.md as symlinks to AGENTS.md
+- **Key Features**:
+  - `agentsmd` - Apply all new migrations to current project
+  - `agentsmd --check-only` - Preview what would be done
+  - `agentsmd --list-migrations` - Show available migrations
+  - `agentsmd --project ~/work/myapp` - Run on specific directory
+  - `agentsmd --no-cache` - Force fresh Claude analysis
+- See [Agentsmd Guide](docs/agentsmd-guide.md) for detailed usage
 
 ### Using Claude Code Hooks to Send Ntfy.sh Notifications
 Prerequisites
