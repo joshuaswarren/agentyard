@@ -1,0 +1,85 @@
+# Judge AI PR Reviewer Configuration Sample
+# This file demonstrates all available configuration options
+
+# Default model configuration
+model:
+  # Model name - can be a HuggingFace model ID or local name
+  name: "mistral-small-2409"
+  
+  # Model file path - resolved using the following hierarchy:
+  # 1. This explicit path (if specified)
+  # 2. Per-model path in 'models' section below
+  # 3. $AGENTYARD_MODELS_PATH environment variable
+  # 4. models_dir setting below
+  # 5. Default: ~/.agentyard/models/<model_name>.gguf
+  # path: "~/.agentyard/models/mistral-small-2409.gguf"
+  
+  # Context window size (tokens)
+  context_size: 32768
+  
+  # GPU layers to offload (-1 = all layers, 0 = CPU only)
+  gpu_layers: -1
+  
+  # Temperature for response generation (0.0-1.0)
+  # Lower = more deterministic, higher = more creative
+  temperature: 0.1
+  
+  # Maximum tokens in response
+  max_tokens: 4096
+
+# Global models directory (used if no per-model path is specified)
+# Can be overridden by AGENTYARD_MODELS_PATH environment variable
+models_dir: "~/.agentyard/models"
+
+# Per-model path overrides
+# Use this section to specify custom paths for specific models
+models:
+  # Example: Override path for a specific model
+  # "codellama-7b":
+  #   path: "/data/models/codellama-7b-instruct.Q4_K_M.gguf"
+  
+  # Example: Another model with custom location
+  # "mixtral-8x7b":
+  #   path: "~/custom-models/mixtral-8x7b-instruct.Q5_K_M.gguf"
+
+# Code review settings
+review:
+  # Maximum number of diff lines to process
+  # Large diffs will be truncated to this limit
+  max_diff_lines: 1000
+  
+  # Include PR description in the review prompt
+  include_pr_description: true
+  
+  # Output format (currently only markdown is supported)
+  output_format: "markdown"
+
+# GitHub settings
+github:
+  # Default git remote to use
+  default_remote: "origin"
+
+# Optional: Review output settings
+# output:
+#   # Save reviews to disk (set via JUDGE_SAVE_REVIEWS env var)
+#   # save_reviews: true
+#   # reviews_dir: "~/.agentyard/reviews"
+
+# Model recommendations by system capability:
+# - High (32GB+ RAM with GPU): Q8_0, Q6_K, Q5_K_M
+# - Medium (16-24GB RAM): Q5_K_M, Q4_K_M, Q4_0  
+# - Low (<16GB RAM): Q4_K_M, Q3_K_M, Q2_K
+
+# Common model configurations:
+# 
+# Mistral models:
+# - mistral-small: Good balance of speed and quality
+# - mistral-medium: Higher quality, more resource intensive
+# 
+# CodeLlama models:
+# - codellama-7b: Fast, good for code review
+# - codellama-13b: Better quality, needs more RAM
+# - codellama-34b: Best quality, requires high-end hardware
+#
+# Mixtral models:
+# - mixtral-8x7b: Excellent quality, requires significant resources
