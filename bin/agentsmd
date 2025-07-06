@@ -32,6 +32,7 @@ BEST_PRACTICES_DIR="${AGENTSMD_ROOT}/best-practices"
 CACHE_DIR="${AGENTSMD_ROOT}/cache"
 TEMPLATES_DIR="${AGENTSMD_ROOT}/templates"
 LIB_DIR="${AGENTSMD_ROOT}/lib"
+RULES_DIR="${AGENTSMD_ROOT}/rules"
 
 # Default options
 PROJECT_DIR="."
@@ -444,6 +445,184 @@ agentsmd:
 EOF
 }
 
+# Calculate checksum of a file
+calculate_checksum() {
+  local file="$1"
+  if command_exists sha256sum; then
+    sha256sum "$file" | cut -d' ' -f1
+  elif command_exists shasum; then
+    shasum -a 256 "$file" | cut -d' ' -f1
+  else
+    # Fallback to md5 if sha256 not available
+    md5sum "$file" 2>/dev/null | cut -d' ' -f1 || md5 "$file" 2>/dev/null | awk '{print $NF}'
+  fi
+}
+
+# Read rules tracking file
+read_rules_file() {
+  local rules_file="$1"
+  
+  if [[ ! -f "$rules_file" ]]; then
+    echo ""
+    return
+  fi
+  
+  cat "$rules_file"
+}
+
+# Write rules tracking file
+write_rules_file() {
+  local rules_file="$1"
+  local content="$2"
+  
+  echo "$content" > "$rules_file"
+}
+
+# Get rule entry from tracking file
+get_rule_entry() {
+  local rules_content="$1"
+  local rule_path="$2"
+  
+  echo "$rules_content" | grep -A2 "^- path: $rule_path" || echo ""
+}
+
+# Sync rules to project directory
+sync_rules() {
+  local project_path="$1"
+  local rules_file="$project_path/.agentyard-rules.yml"
+  local target_dir="$project_path/docs/agentyard/rules"
+  local synced_rules=()
+  local skipped_rules=()
+  local new_rules=()
+  
+  log_verbose "Syncing rules to project..."
+  
+  # Read existing rules tracking
+  local rules_content=$(read_rules_file "$rules_file")
+  
+  # Create target directory if needed
+  if [[ ! -d "$target_dir" ]]; then
+    if [[ "$CHECK_ONLY" == "true" ]]; then
+      log "Would create directory: $target_dir"
+    else
+      mkdir -p "$target_dir"
+      log_verbose "Created rules directory: $target_dir"
+    fi
+  fi
+  
+  # Start building new rules content
+  local new_rules_content="# Agentyard rules tracking
+rules:"
+  
+  # Find all .mdc files in rules directory
+  if [[ -d "$RULES_DIR" ]]; then
+    while IFS= read -r -d '' rule_file; do
+      local relative_path="${rule_file#$RULES_DIR/}"
+      local target_file="$target_dir/$relative_path"
+      local target_file_dir=$(dirname "$target_file")
+      local source_checksum=$(calculate_checksum "$rule_file")
+      
+      # Create subdirectory if needed
+      if [[ ! -d "$target_file_dir" ]] && [[ "$target_file_dir" != "$target_dir" ]]; then
+        if [[ "$CHECK_ONLY" == "false" ]]; then
+          mkdir -p "$target_file_dir"
+        fi
+      fi
+      
+      # Check if file exists and needs sync
+      local should_sync=true
+      local sync_reason=""
+      
+      if [[ -f "$target_file" ]]; then
+        local existing_entry=$(get_rule_entry "$rules_content" "$relative_path")
+        if [[ -n "$existing_entry" ]]; then
+          local tracked_checksum=$(echo "$existing_entry" | grep "checksum:" | sed 's/.*checksum: //' | tr -d '"')
+          local current_checksum=$(calculate_checksum "$target_file")
+          
+          if [[ "$tracked_checksum" != "$current_checksum" ]]; then
+            # Local modifications detected
+            should_sync=false
+            sync_reason="local modifications"
+            skipped_rules+=("$relative_path")
+          elif [[ "$tracked_checksum" != "$source_checksum" ]]; then
+            # Update available
+            sync_reason="update available"
+          else
+            # Already up to date
+            should_sync=false
+            sync_reason="already up to date"
+          fi
+        else
+          # File exists but not tracked - treat as local modification
+          should_sync=false
+          sync_reason="untracked local file"
+          skipped_rules+=("$relative_path")
+        fi
+      else
+        sync_reason="new rule"
+        new_rules+=("$relative_path")
+      fi
+      
+      # Perform sync if needed
+      if [[ "$should_sync" == "true" ]]; then
+        if [[ "$CHECK_ONLY" == "true" ]]; then
+          log "Would sync: $relative_path ($sync_reason)"
+        else
+          cp "$rule_file" "$target_file"
+          synced_rules+=("$relative_path")
+          log_verbose "Synced: $relative_path ($sync_reason)"
+        fi
+      else
+        log_verbose "Skipped: $relative_path ($sync_reason)"
+      fi
+      
+      # Add to tracking content
+      new_rules_content+="
+- path: $relative_path
+  checksum: $source_checksum
+  synced_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      
+    done < <(find "$RULES_DIR" -name "*.mdc" -type f -print0 | sort -z)
+  fi
+  
+  # Write updated rules tracking file
+  if [[ "$CHECK_ONLY" == "false" ]] && [[ ${#synced_rules[@]} -gt 0 || ${#new_rules[@]} -gt 0 ]]; then
+    write_rules_file "$rules_file" "$new_rules_content"
+    log_verbose "Updated rules tracking file"
+  fi
+  
+  # Report results
+  if [[ ${#new_rules[@]} -gt 0 ]]; then
+    log "Found ${#new_rules[@]} new rule(s)"
+  fi
+  
+  if [[ ${#synced_rules[@]} -gt 0 ]]; then
+    log "Synced ${#synced_rules[@]} rule(s)"
+  fi
+  
+  if [[ ${#skipped_rules[@]} -gt 0 ]]; then
+    log_warning "Skipped ${#skipped_rules[@]} rule(s) with local modifications:"
+    for rule in "${skipped_rules[@]}"; do
+      log_warning "  - $rule"
+    done
+  fi
+  
+  # Return list of all rules for AGENTS.md generation
+  echo "$new_rules_content" | grep "^- path:" | sed 's/- path: //'
+}
+
+# Get list of rules in project
+get_project_rules() {
+  local project_path="$1"
+  local rules_dir="$project_path/docs/agentyard/rules"
+  
+  if [[ -d "$rules_dir" ]]; then
+    find "$rules_dir" -name "*.mdc" -type f | sort | while read -r rule_file; do
+      echo "${rule_file#$project_path/}"
+    done
+  fi
+}
+
 # Create symlink if it doesn't exist
 create_symlink() {
   local source="$1"
@@ -709,6 +888,8 @@ main() {
   
   if [[ ${#migrations_to_apply[@]} -eq 0 ]]; then
     log "No new migrations to apply (current version: $current_version)"
+    # Still sync rules even if no new migrations
+    sync_rules "$project_path" > /dev/null
     exit 0
   fi
   
@@ -720,6 +901,8 @@ main() {
     for migration in "${migrations_to_apply[@]}"; do
       echo "  - $(basename "$migration")"
     done
+    # Also check rules
+    sync_rules "$project_path" > /dev/null
     exit 0
   fi
   
@@ -750,6 +933,18 @@ main() {
     local migration_number=$(basename "$migration" | grep -o '^[0-9]\+' || echo "0")
     current_version=$migration_number
   done
+  
+  # Sync rules
+  sync_rules "$project_path" > /dev/null
+  
+  # Add rule references section
+  local rule_files=$(get_project_rules "$project_path")
+  if [[ -n "$rule_files" ]]; then
+    agents_content+="\n\n## Additional Rules and References\n"
+    while IFS= read -r rule_file; do
+      agents_content+="\n@$rule_file"
+    done <<< "$rule_files"
+  fi
   
   # Wrap lines before writing
   log_verbose "Wrapping lines to 120 characters..."
