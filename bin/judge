@@ -33,9 +33,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Default configuration
 DEFAULT_CONFIG="$HOME/.agentyard/judge.yaml"
-DEFAULT_MODEL="mistralai/mistral-small-2409"
+DEFAULT_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
 MAX_DIFF_LINES=1000
 FORCE_MODE=false
+
+# Initialize command flags
+init_config=false
+scan_models=false
+pr_input=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -87,6 +92,12 @@ fi
 if [[ ${1:-} == "--init-config" ]]; then
   init_config=true
   shift
+  # Check if next arg is --force, if so keep it for later
+  if [[ ${1:-} == "--force" ]]; then
+    FORCE_MODE=true
+    shift
+  fi
+  # Now check for custom config file
   config_file="${1:-$DEFAULT_CONFIG}"
 elif [[ ${1:-} == "scan-models" ]]; then
   scan_models=true
@@ -136,52 +147,108 @@ for cmd in gh python3; do
   fi
 done
 
-# Check for Python dependencies
-if ! python3 -c "import llama_cpp" 2>/dev/null; then
-  echo -e "${YELLOW}Warning: llama-cpp-python not installed.${NC}" >&2
-  echo "Installing llama-cpp-python..." >&2
-  
-  # Detect platform for Metal support
-  if [[ "$(uname)" == "Darwin" ]]; then
-    echo "Detected macOS - installing with Metal support..."
-    CMAKE_ARGS="-DLLAMA_METAL=on" pip3 install llama-cpp-python --upgrade || {
-      echo -e "${RED}Error: Failed to install llama-cpp-python${NC}" >&2
-      exit 1
-    }
-  else
-    pip3 install llama-cpp-python --upgrade || {
-      echo -e "${RED}Error: Failed to install llama-cpp-python${NC}" >&2
-      exit 1
-    }
-  fi
-fi
+# Check and install all Python dependencies BEFORE any imports
+echo "📦 Checking Python dependencies..."
 
-# Check if PyYAML is installed for config parsing
-if ! python3 -c "import yaml" 2>/dev/null; then
-  echo "Installing PyYAML for configuration support..."
-  pip3 install PyYAML || {
-    echo -e "${RED}Error: Failed to install PyYAML${NC}" >&2
-    exit 1
-  }
-fi
+# Create a temporary Python script to check all dependencies at once
+python3 - <<'EOF' || exit 1
+import subprocess
+import sys
 
-# Check if requests is installed for HuggingFace API
-if ! python3 -c "import requests" 2>/dev/null; then
-  echo "Installing requests for model management..."
-  pip3 install requests || {
-    echo -e "${RED}Error: Failed to install requests${NC}" >&2
-    exit 1
-  }
-fi
+# List of required packages
+required_packages = [
+    ('yaml', 'PyYAML'),
+    ('requests', 'requests'),
+    ('psutil', 'psutil'),
+    ('llama_cpp', 'llama-cpp-python')
+]
 
-# Check if psutil is installed for system specs
-if ! python3 -c "import psutil" 2>/dev/null; then
-  echo "Installing psutil for system detection..."
-  pip3 install psutil || {
-    echo -e "${RED}Error: Failed to install psutil${NC}" >&2
-    exit 1
-  }
-fi
+# Check which packages are missing
+missing_packages = []
+for module_name, package_name in required_packages:
+    try:
+        __import__(module_name)
+    except ImportError:
+        missing_packages.append((module_name, package_name))
+
+# Install missing packages
+if missing_packages:
+    print("Installing missing Python packages...")
+    for module_name, package_name in missing_packages:
+        print(f"  - Installing {package_name}...")
+        
+        # Try different installation methods
+        install_methods = [
+            # First try with --user flag
+            ([sys.executable, '-m', 'pip', 'install', package_name, '--upgrade', '--user'], None),
+            # If that fails due to externally managed env, try with break-system-packages
+            ([sys.executable, '-m', 'pip', 'install', package_name, '--upgrade', '--break-system-packages', '--user'], None)
+        ]
+        
+        result = None
+        for cmd, env_override in install_methods:
+            # Special handling for llama-cpp-python on macOS
+            if package_name == 'llama-cpp-python' and sys.platform == 'darwin':
+                env = {**subprocess.os.environ, 'CMAKE_ARGS': '-DLLAMA_METAL=on'}
+            else:
+                env = subprocess.os.environ.copy()
+                
+            if env_override:
+                env.update(env_override)
+                
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                break
+            elif "externally-managed-environment" not in result.stderr:
+                # If it's not the externally managed error, don't try other methods
+                break
+        
+        if result.returncode != 0:
+            print(f"Error: Failed to install {package_name}", file=sys.stderr)
+            print(f"Error output: {result.stderr}", file=sys.stderr)
+            print("\nSuggestions:", file=sys.stderr)
+            print("1. Try installing manually:", file=sys.stderr)
+            print(f"   pip install {package_name}", file=sys.stderr)
+            print("2. If using conda/mamba, try:", file=sys.stderr)
+            print(f"   conda install -c conda-forge {package_name}", file=sys.stderr)
+            print("3. Check your Python environment:", file=sys.stderr)
+            print(f"   which python3: {sys.executable}", file=sys.stderr)
+            print("4. For macOS with brew Python issues, try:", file=sys.stderr)
+            print("   brew install python@3.11 && brew link python@3.11", file=sys.stderr)
+            sys.exit(1)
+        else:
+            print(f"  ✅ {package_name} installed successfully")
+else:
+    print("✅ All Python dependencies are installed")
+
+# Final verification - try to import all modules
+print("\n📋 Verifying imports...")
+failed_imports = []
+for module_name, package_name in required_packages:
+    try:
+        __import__(module_name)
+        print(f"  ✅ {module_name} imports successfully")
+    except ImportError as e:
+        failed_imports.append((module_name, package_name, str(e)))
+        print(f"  ❌ {module_name} import failed: {e}")
+
+if failed_imports:
+    print("\n❌ Some modules failed to import even after installation.", file=sys.stderr)
+    print("This usually means packages were installed in a different Python environment.", file=sys.stderr)
+    print("\nYour Python interpreter:", file=sys.stderr)
+    print(f"  {sys.executable}", file=sys.stderr)
+    print("\nTo fix this:", file=sys.stderr)
+    print("1. Check which Python is being used:", file=sys.stderr)
+    print("   which python3", file=sys.stderr)
+    print("2. Install packages for the correct Python:", file=sys.stderr)
+    for module_name, package_name, error in failed_imports:
+        print(f"   {sys.executable} -m pip install {package_name}", file=sys.stderr)
+    print("3. Or use conda/mamba if you're in a conda environment", file=sys.stderr)
+    sys.exit(1)
+
+print("\n✅ Dependency check complete - all modules import successfully!")
+EOF
 
 # ---- Handle --init-config ---------------------------------------------------
 if [[ "$init_config" == "true" ]]; then
@@ -193,9 +260,22 @@ if [[ "$init_config" == "true" ]]; then
   python3 - "$config_file" "$FORCE_MODE" <<'EOF'
 import sys
 import os
-import yaml
 from pathlib import Path
-from judge.model_manager import create_default_config
+
+# Import yaml here after dependencies are installed
+try:
+    import yaml
+except ImportError:
+    print("Error: PyYAML is not installed. This should have been installed earlier.", file=sys.stderr)
+    sys.exit(1)
+
+# Import model_manager after yaml is available
+try:
+    from judge.model_manager import create_default_config
+except ImportError as e:
+    print(f"Error importing model_manager: {e}", file=sys.stderr)
+    print("Make sure the PYTHONPATH is set correctly.", file=sys.stderr)
+    sys.exit(1)
 
 config_path = Path(sys.argv[1])
 
@@ -247,19 +327,27 @@ if [[ "$scan_models" == "true" ]]; then
     # Add Python path for our modules
     export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
     
-    python3 -c "
-import yaml
-from pathlib import Path
-from judge.model_manager import create_default_config
-
-config_path = Path('$config_file')
-config_path.parent.mkdir(parents=True, exist_ok=True)
-config = create_default_config(config_path)
-
-with open(config_path, 'w') as f:
-    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-print(f'✅ Configuration created at: {config_path}')
-"
+    python3 - <<EOF
+import sys
+try:
+    import yaml
+    from pathlib import Path
+    from judge.model_manager import create_default_config
+    
+    config_path = Path('$config_file')
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config = create_default_config(config_path)
+    
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    print(f'✅ Configuration created at: {config_path}')
+except ImportError as e:
+    print(f"Error during config creation: {e}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"Unexpected error: {e}", file=sys.stderr)
+    sys.exit(1)
+EOF
   fi
   
   # Add Python path for our modules
@@ -270,9 +358,17 @@ print(f'✅ Configuration created at: {config_path}')
 import sys
 import os
 import json
-import yaml
 from pathlib import Path
 from glob import glob
+
+# Import yaml with error handling
+try:
+    import yaml
+except ImportError:
+    print("Error: PyYAML is not installed. This should have been installed earlier.", file=sys.stderr)
+    sys.exit(1)
+
+# Import after yaml is available
 from judge.model_manager import ModelManager
 
 config_path = Path(sys.argv[1])
@@ -330,18 +426,51 @@ for base_path in unique_paths:
         continue
     
     # Look for namespace/model structure
-    for namespace_dir in base_path.iterdir():
+    try:
+        namespace_dirs = list(base_path.iterdir())
+    except Exception as e:
+        print(f"   ⚠️  Error reading {base_path}: {e}")
+        continue
+        
+    for namespace_dir in namespace_dirs:
         if not namespace_dir.is_dir():
             continue
+        
+        # Skip hidden directories and common non-model directories
+        if namespace_dir.name.startswith('.') or namespace_dir.name in ['cache', 'tmp', 'temp']:
+            continue
             
-        for model_dir in namespace_dir.iterdir():
+        try:
+            model_dirs = list(namespace_dir.iterdir())
+        except Exception as e:
+            print(f"   ⚠️  Error reading {namespace_dir}: {e}")
+            continue
+            
+        for model_dir in model_dirs:
             if not model_dir.is_dir():
                 continue
                 
-            # Look for GGUF files
-            gguf_files = list(model_dir.glob("*.gguf"))
-            # Also check for safetensors files (LM Studio format)
-            safetensors_files = list(model_dir.glob("*.safetensors"))
+            # Skip hidden directories
+            if model_dir.name.startswith('.'):
+                continue
+                
+            # Look for GGUF files (with timeout protection)
+            try:
+                gguf_files = []
+                for f in model_dir.glob("*.gguf"):
+                    gguf_files.append(f)
+                    if len(gguf_files) > 10:  # Limit files per model
+                        break
+                        
+                # Also check for safetensors files (LM Studio format)
+                safetensors_files = []
+                for f in model_dir.glob("*.safetensors"):
+                    safetensors_files.append(f)
+                    if len(safetensors_files) > 10:  # Limit files per model
+                        break
+            except Exception as e:
+                print(f"   ⚠️  Error scanning {model_dir}: {e}")
+                continue
             
             model_files = gguf_files + safetensors_files
             
@@ -480,9 +609,45 @@ fi
 
 # ---- Create default config if it doesn't exist ------------------------------
 if [[ ! -f "$config_file" ]]; then
-  echo "Creating default configuration at $config_file..."
-  echo "Run 'judge --init-config' to create a configuration file."
-  exit 1
+  echo -e "${YELLOW}Configuration file not found at $config_file${NC}"
+  echo "Creating default configuration..."
+  
+  # Create config directory if needed
+  mkdir -p "$(dirname "$config_file")"
+  
+  # Add Python path for our modules
+  export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
+  
+  # Create default config
+  if ! python3 - "$config_file" <<'EOF'
+import sys
+try:
+    import yaml
+    from pathlib import Path
+    from judge.model_manager import create_default_config
+    
+    config_path = Path(sys.argv[1])
+    config = create_default_config(config_path)
+    
+    with open(config_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    
+    print(f"✅ Created default configuration at: {config_path}")
+    print("")
+    print("You can now:")
+    print("  1. Set AGENTYARD_MODELS_PATH environment variable")
+    print("  2. Edit the config to set custom model paths")
+    print("  3. Run 'judge scan-models' to discover existing models")
+    print("  4. Run judge again to review a pull request")
+except Exception as e:
+    print(f"Error creating config: {e}", file=sys.stderr)
+    sys.exit(1)
+EOF
+  then
+    echo -e "${RED}Failed to create default configuration${NC}" >&2
+    echo "Please run: judge --init-config" >&2
+    exit 1
+  fi
 fi
 
 # ---- Validate model early ---------------------------------------------------
@@ -496,12 +661,18 @@ if [[ -n "$model" ]]; then
   model_name="$model"
 else
   # Extract model name from config
-  model_name=$(python3 -c "
-import yaml
-with open('$config_file', 'r') as f:
-    config = yaml.safe_load(f)
-    print(config.get('model', {}).get('name', 'mistralai/mistral-small-2409'))
-" 2>/dev/null || echo "mistralai/mistral-small-2409")
+  model_name=$(python3 - "$config_file" <<'EOF' 2>/dev/null || echo "mistralai/mistral-small-2409"
+import sys
+try:
+    import yaml
+    config_file = sys.argv[1]
+    with open(config_file, 'r') as f:
+        config = yaml.safe_load(f)
+        print(config.get('model', {}).get('name', 'mistralai/Mistral-7B-Instruct-v0.3'))
+except:
+    print('mistralai/Mistral-7B-Instruct-v0.3')
+EOF
+  )
 fi
 
 # Validate and download model if needed

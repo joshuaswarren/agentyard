@@ -9,8 +9,6 @@ import sys
 import json
 import struct
 import platform
-import psutil
-import requests
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse, quote
@@ -18,7 +16,25 @@ import hashlib
 import time
 from datetime import datetime, timedelta
 from collections import OrderedDict
-import yaml
+
+# Import these modules with error handling
+try:
+    import psutil
+except ImportError:
+    print("Warning: psutil not available. System detection will be limited.", file=sys.stderr)
+    psutil = None
+
+try:
+    import requests
+except ImportError:
+    print("Warning: requests not available. Model downloading will be disabled.", file=sys.stderr)
+    requests = None
+
+try:
+    import yaml
+except ImportError:
+    print("Warning: PyYAML not available. Configuration support will be limited.", file=sys.stderr)
+    yaml = None
 
 
 class GGUFMetadataReader:
@@ -192,6 +208,10 @@ class ModelManager:
         if not self.config_path or not self.config_path.exists():
             return {}
         
+        if yaml is None:
+            print("Warning: PyYAML not installed. Cannot load configuration.", file=sys.stderr)
+            return {}
+        
         try:
             with open(self.config_path, 'r') as f:
                 return yaml.safe_load(f) or {}
@@ -243,6 +263,10 @@ class ModelManager:
     
     def _get_system_specs(self) -> str:
         """Determine system capability level based on RAM and GPU"""
+        if psutil is None:
+            print("Warning: psutil not available. Assuming medium system specs.", file=sys.stderr)
+            return "medium"
+            
         total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
         
         # Check for GPU support
@@ -307,6 +331,10 @@ class ModelManager:
     
     def query_huggingface_model(self, model_id: str) -> Optional[Dict]:
         """Query HuggingFace for model information"""
+        if requests is None:
+            print("Warning: requests module not available. Cannot query HuggingFace.", file=sys.stderr)
+            return None
+            
         # Check cache first
         cached = self._get_cached_model_info(model_id)
         if cached:
@@ -411,6 +439,10 @@ class ModelManager:
     
     def download_model(self, url: str, dest_path: Path, show_progress: bool = True) -> bool:
         """Download a model file with progress indicator"""
+        if requests is None:
+            print("Error: requests module not available. Cannot download models.", file=sys.stderr)
+            return False
+            
         try:
             # Ensure destination directory exists
             dest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -529,7 +561,10 @@ class ModelManager:
 
 def create_default_config(config_path: Path, model_name: Optional[str] = None) -> Dict[str, Any]:
     """Create a default configuration file"""
-    default_model = model_name or "mistralai/mistral-small-2409"
+    if yaml is None:
+        raise ImportError("PyYAML is required to create configuration files")
+        
+    default_model = model_name or "mistralai/Mistral-7B-Instruct-v0.3"
     default_config = {
         "model": {
             "name": default_model,

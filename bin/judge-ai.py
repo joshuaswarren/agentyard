@@ -9,13 +9,22 @@ import json
 import yaml
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 import argparse
+
+# Add parent directory to path for our modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'lib'))
 
 try:
     from llama_cpp import Llama
 except ImportError:
     print("Error: llama-cpp-python not installed", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    from judge.model_manager import ModelManager
+except ImportError:
+    print("Error: Could not import model manager", file=sys.stderr)
     sys.exit(1)
 
 
@@ -24,14 +33,13 @@ def load_config(config_path: str) -> Dict[str, Any]:
     try:
         config_path = os.path.expanduser(config_path)
         with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+            return yaml.safe_load(f) or {}
     except Exception as e:
         print(f"Error loading config: {e}", file=sys.stderr)
         # Return default config
         return {
             "model": {
                 "name": "mistral-small-2409",
-                "path": "~/.agentyard/models/mistral-small-2409.gguf",
                 "context_size": 32768,
                 "gpu_layers": -1,
                 "temperature": 0.1,
@@ -45,7 +53,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
         }
 
 
-def create_review_prompt(pr_data: Dict[str, Any], diff_content: str) -> str:
+def create_review_prompt(pr_data: Dict[str, Any], diff_content: str) -> Tuple[str, str]:
     """Create the prompt for code review"""
     system_prompt = """You are an expert code reviewer called "Judge". Your role is to:
 1. Identify bugs, security issues, and logic errors
@@ -95,24 +103,26 @@ def run_review(config_path: str, pr_data_json: str, diff_content: str,
     try:
         # Load configuration
         config = load_config(config_path)
-        model_config = config['model']
+        model_config = config.get('model', {})
         
-        # Override model if specified
-        if model_override:
-            model_config['name'] = model_override
+        # Determine model name
+        model_name = model_override or model_config.get('name', 'mistralai/mistral-small-2409')
         
-        # Expand model path
-        model_path = os.path.expanduser(model_config['path'])
+        # Use ModelManager to get model path
+        manager = ModelManager(config_path)
+        model_dir = manager.get_model_path(model_name)
         
-        # Check if model file exists
-        if not os.path.exists(model_path):
-            print(f"Error: Model file not found at {model_path}", file=sys.stderr)
-            print("Please download the model or update the path in your config.", file=sys.stderr)
-            print("\nTo download models:", file=sys.stderr)
-            print("  1. Visit https://huggingface.co/", file=sys.stderr)
-            print("  2. Search for GGUF models (e.g., 'mistral-small gguf')", file=sys.stderr)
-            print("  3. Download a quantized version (e.g., Q4_K_M)", file=sys.stderr)
-            print(f"  4. Save to {model_path}", file=sys.stderr)
+        # Find the GGUF file in the model directory
+        if model_dir.exists() and model_dir.is_dir():
+            gguf_files = list(model_dir.glob("*.gguf"))
+            if gguf_files:
+                model_path = gguf_files[0]  # Use the first GGUF file found
+            else:
+                print(f"Error: No GGUF files found in {model_dir}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print(f"Error: Model directory not found at {model_dir}", file=sys.stderr)
+            print("The model should have been validated earlier. Please check your setup.", file=sys.stderr)
             sys.exit(1)
         
         # Parse PR data
@@ -124,7 +134,7 @@ def run_review(config_path: str, pr_data_json: str, diff_content: str,
         # Initialize model with progress indicator
         print("🤖 Loading AI model...", file=sys.stderr)
         llm = Llama(
-            model_path=model_path,
+            model_path=str(model_path),
             n_ctx=model_config.get('context_size', 32768),
             n_gpu_layers=model_config.get('gpu_layers', -1),
             verbose=False
