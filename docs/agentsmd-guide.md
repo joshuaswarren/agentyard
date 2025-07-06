@@ -25,6 +25,7 @@ agentsmd --list-migrations
 3. **Analyzes Projects**: Uses Claude Code to generate project-specific documentation
 4. **Tracks Versions**: Prevents duplicate migrations with `.agentyard-version.yml`
 5. **Caches Results**: Stores Claude analysis results for performance
+6. **Line Wrapping**: Automatically wraps lines to 120 characters while preserving markdown formatting
 
 ## How It Works
 
@@ -48,7 +49,7 @@ Analyze this repository and provide a 2-3 sentence overview.
 {{/CLAUDE_PROMPT}}
 ```
 
-Everything between `{{CLAUDE_PROMPT}}` and `{{/CLAUDE_PROMPT}}` is sent to Claude Code, and the output replaces the entire block.
+Everything between `{{CLAUDE_PROMPT}}` and `{{/CLAUDE_PROMPT}}` is sent to Claude Code, and only the response (not the prompt or markers) is included in the output.
 
 ### Version Tracking
 
@@ -67,6 +68,17 @@ Claude analysis results are cached in `~/agentyard/agentsmd/cache/` to avoid red
 - The repository changes (git commit hash)
 - Key project files are modified
 - You use the `--no-cache` option
+
+### Line Wrapping
+
+After all migrations are processed, the AGENTS.md content is automatically wrapped to keep lines under 120 characters for better readability. The wrapping is intelligent and preserves:
+- **Headers**: Remain on single lines regardless of length
+- **Code blocks**: Content between ``` markers is never wrapped
+- **Lists**: Proper indentation is maintained with continuation lines
+- **URLs**: Never broken across lines even if they exceed 120 characters
+- **Blockquotes**: Each wrapped line maintains the > prefix
+
+If the `fmt` command is not available, line wrapping is skipped with a warning.
 
 ## Command Options
 
