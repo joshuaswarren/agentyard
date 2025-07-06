@@ -810,7 +810,11 @@ def load_config(config_path: str) -> Dict[str, Any]:
         }
 
 
-def create_review_prompt(pr_data: Dict[str, Any], diff_content: str) -> Tuple[str, str]:
+def estimate_tokens(text: str) -> int:
+    """Rough estimate of token count (4 chars per token average)"""
+    return len(text) // 4
+
+def create_review_prompt(pr_data: Dict[str, Any], diff_content: str, context_size: int = 32768) -> Tuple[str, str]:
     """Create the prompt for code review"""
     system_prompt = """You are an expert code reviewer called "Judge". Your role is to:
 1. Identify bugs, security issues, and logic errors
@@ -824,14 +828,37 @@ Review the following pull request and provide detailed feedback."""
     pr_title = pr_data.get('title', 'Untitled PR')
     pr_description = pr_data.get('body', 'No description provided')
     
-    user_prompt = f"""PR Title: {pr_title}
+    # Truncate description if too long
+    if len(pr_description) > 1000:
+        pr_description = pr_description[:997] + "..."
+    
+    # Build user prompt
+    user_prompt_base = f"""PR Title: {pr_title}
 Description: {pr_description}
 
 Changed Files:
 {', '.join(pr_data.get('files', []))}
 
 Diff:
-{diff_content}
+"""
+    
+    # Estimate token usage
+    base_tokens = estimate_tokens(system_prompt + user_prompt_base)
+    diff_tokens = estimate_tokens(diff_content)
+    response_tokens = 4096  # Reserve for response
+    
+    total_needed = base_tokens + diff_tokens + response_tokens
+    
+    if total_needed > context_size * 0.9:  # Leave 10% buffer
+        # Need to truncate diff
+        available_for_diff = int((context_size * 0.9) - base_tokens - response_tokens)
+        max_diff_chars = available_for_diff * 4  # Convert back to chars
+        
+        if max_diff_chars < len(diff_content):
+            print(f"⚠️  Warning: Diff too large for context ({diff_tokens} tokens). Truncating to fit.", file=sys.stderr)
+            diff_content = diff_content[:max_diff_chars] + "\n\n... (diff truncated for context window)"
+    
+    user_prompt = user_prompt_base + diff_content + """
 
 Please provide a comprehensive code review with:
 - Summary of critical issues, important concerns, and suggestions
@@ -886,13 +913,17 @@ def run_review(config_path: str, pr_data_json: str, diff_content: str,
         pr_data = json.loads(pr_data_json)
         
         # Create prompt
-        system_prompt, user_prompt = create_review_prompt(pr_data, diff_content)
+        context_size = model_config.get('context_size', 32768)
+        system_prompt, user_prompt = create_review_prompt(pr_data, diff_content, context_size)
         
         # Initialize model with progress indicator
         print("🤖 Loading AI model...", file=sys.stderr)
+        print(f"   Model: {model_path.name}", file=sys.stderr)
+        print(f"   Context: {context_size} tokens", file=sys.stderr)
+        
         llm = Llama(
             model_path=str(model_path),
-            n_ctx=model_config.get('context_size', 32768),
+            n_ctx=context_size,
             n_gpu_layers=model_config.get('gpu_layers', -1),
             verbose=False
         )
