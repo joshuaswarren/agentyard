@@ -64,7 +64,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Default configuration
 DEFAULT_CONFIG="$HOME/.agentyard/judge.yaml"
 DEFAULT_MODEL="mistralai/Mistral-7B-Instruct-v0.3"
-MAX_DIFF_LINES=1000
+MAX_DIFF_LINES=3000
 FORCE_MODE=false
 
 # Initialize command flags
@@ -803,7 +803,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
                 "max_tokens": 4096
             },
             "review": {
-                "max_diff_lines": 1000,
+                "max_diff_lines": 3000,
                 "include_pr_description": True,
                 "output_format": "markdown"
             }
@@ -967,7 +967,45 @@ diff_content=$(gh pr diff "$pr_number" || {
 diff_lines=$(echo "$diff_content" | wc -l)
 if [[ $diff_lines -gt $MAX_DIFF_LINES ]]; then
   echo -e "${YELLOW}Warning: Large diff ($diff_lines lines). Truncating to $MAX_DIFF_LINES lines.${NC}"
-  diff_content=$(echo "$diff_content" | head -n "$MAX_DIFF_LINES")
+  
+  # Smart truncation: try to keep complete file changes
+  # Count the number of files and lines per file
+  file_count=$(echo "$diff_content" | grep -c "^diff --git" || echo "1")
+  
+  if [[ $file_count -gt 1 ]]; then
+    # Multiple files - try to include complete files up to the limit
+    echo "  Multiple files detected. Attempting smart truncation..."
+    
+    # Create a temporary file to build truncated diff
+    temp_diff=""
+    current_lines=0
+    
+    # Process each file diff
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^diff\ --git ]]; then
+        # New file starts - check if we have room
+        next_file_lines=$(echo "$diff_content" | sed -n "/$line/,/^diff --git/p" | wc -l)
+        
+        if [[ $((current_lines + next_file_lines)) -gt $MAX_DIFF_LINES ]]; then
+          # Would exceed limit - stop here
+          break
+        fi
+      fi
+      
+      temp_diff="${temp_diff}${line}"$'\n'
+      ((current_lines++))
+      
+      if [[ $current_lines -ge $MAX_DIFF_LINES ]]; then
+        break
+      fi
+    done <<< "$diff_content"
+    
+    diff_content="$temp_diff"
+    echo "  Truncated to $current_lines lines, preserving complete file boundaries where possible."
+  else
+    # Single file or fallback - simple truncation
+    diff_content=$(echo "$diff_content" | head -n "$MAX_DIFF_LINES")
+  fi
 fi
 
 # ---- Run AI review ----------------------------------------------------------
@@ -978,14 +1016,31 @@ files_list=$(echo "$pr_data" | jq -r '.files[].path' | paste -sd, -)
 pr_data_with_files=$(echo "$pr_data" | jq --arg files "$files_list" '. + {files: ($files | split(","))}')
 
 # Run the Python helper
+# First, let's add some debugging info
+echo "📝 Preparing AI review with $(echo "$diff_content" | wc -l) lines of diff..."
+echo "   Model: ${model:-default from config}"
+echo "   Files: $files_list"
+
+# Run with error capture
 review_output=$($JUDGE_PYTHON "$helper_script" \
   "$config_file" \
   "$pr_data_with_files" \
   "$diff_content" \
-  ${model:+--model "$model"} || {
-    echo -e "${RED}Error: AI review failed${NC}" >&2
+  ${model:+--model "$model"} 2>&1) || {
+    exit_code=$?
+    echo -e "${RED}Error: AI review failed (exit code: $exit_code)${NC}" >&2
+    echo -e "${RED}Error output:${NC}" >&2
+    echo "$review_output" >&2
+    
+    # Common troubleshooting tips
+    echo -e "\n${YELLOW}Troubleshooting tips:${NC}" >&2
+    echo "1. Check if the model file exists and is accessible" >&2
+    echo "2. Ensure you have enough RAM for the model (8GB+ recommended)" >&2
+    echo "3. Try with a smaller model using --model flag" >&2
+    echo "4. Check the log output above for specific errors" >&2
+    
     exit 1
-  })
+  }
 
 # ---- Output the review ------------------------------------------------------
 echo

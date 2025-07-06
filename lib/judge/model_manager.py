@@ -582,7 +582,7 @@ def create_default_config(config_path: Path, model_name: Optional[str] = None) -
             # }
         },
         "review": {
-            "max_diff_lines": 1000,
+            "max_diff_lines": 3000,
             "include_pr_description": True,
             "output_format": "markdown"
         },
