@@ -28,6 +28,36 @@
 #
 set -euo pipefail
 
+# Detect if we're in a virtual environment and find system Python
+# This ensures judge uses a consistent Python environment regardless of
+# whether the user has activated a project-specific virtual environment
+if [[ -n "${VIRTUAL_ENV:-}" ]] || [[ -n "${CONDA_PREFIX:-}" ]]; then
+  # We're in a virtual environment - find system Python
+  # Try common locations for system Python
+  for python_path in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3 "$HOME/miniforge3/bin/python3" "$HOME/miniconda3/bin/python3"; do
+    if [[ -x "$python_path" ]]; then
+      # Found a system Python
+      JUDGE_PYTHON="$python_path"
+      JUDGE_PIP="$python_path -m pip"
+      break
+    fi
+  done
+  
+  # If we couldn't find a system Python, fall back to whatever python3 is available
+  if [[ -z "${JUDGE_PYTHON:-}" ]]; then
+    echo "⚠️  Warning: Running in virtual environment but couldn't find system Python" >&2
+    echo "   Using default python3 which may cause dependency issues" >&2
+    JUDGE_PYTHON="python3"
+    JUDGE_PIP="python3 -m pip"
+  else
+    echo "📦 Detected virtual environment - using system Python: $JUDGE_PYTHON" >&2
+  fi
+else
+  # Not in a virtual environment, use default
+  JUDGE_PYTHON="python3"
+  JUDGE_PIP="python3 -m pip"
+fi
+
 prog=$(basename "$0")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -137,7 +167,7 @@ done
 # ---- Check dependencies -----------------------------------------------------
 echo "🔍 Checking dependencies..."
 
-for cmd in gh python3; do
+for cmd in gh; do
   if ! command -v "$cmd" >/dev/null; then
     echo -e "${RED}Error: $cmd not installed.${NC}" >&2
     echo "Please install required dependencies:" >&2
@@ -147,13 +177,23 @@ for cmd in gh python3; do
   fi
 done
 
+# Check Python separately using our detected Python
+if ! command -v "$JUDGE_PYTHON" >/dev/null; then
+  echo -e "${RED}Error: Python not found at $JUDGE_PYTHON${NC}" >&2
+  echo "Please install Python 3:" >&2
+  echo "  - https://www.python.org/" >&2
+  exit 1
+fi
+
 # Check and install all Python dependencies BEFORE any imports
 echo "📦 Checking Python dependencies..."
 
 # Create a temporary Python script to check all dependencies at once
-python3 - <<'EOF' || exit 1
+# Pass JUDGE_PYTHON as environment variable
+JUDGE_PYTHON="$JUDGE_PYTHON" $JUDGE_PYTHON - <<'EOF' || exit 1
 import subprocess
 import sys
+import os
 
 # List of required packages
 required_packages = [
@@ -173,6 +213,22 @@ for module_name, package_name in required_packages:
 
 # Install missing packages
 if missing_packages:
+    # First check if pip is available
+    try:
+        subprocess.run([sys.executable, '-m', 'pip', '--version'], 
+                      check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError:
+        print(f"\n❌ Error: pip is not available for {sys.executable}", file=sys.stderr)
+        print(f"Python path: {sys.executable}", file=sys.stderr)
+        print("\nTo fix this:", file=sys.stderr)
+        print("1. Install pip for this Python:", file=sys.stderr)
+        print(f"   {sys.executable} -m ensurepip", file=sys.stderr)
+        print("2. Or use a different Python with pip installed", file=sys.stderr)
+        print("3. Or manually install packages:", file=sys.stderr)
+        for _, package_name in missing_packages:
+            print(f"   - {package_name}", file=sys.stderr)
+        sys.exit(1)
+    
     print("Installing missing Python packages...")
     for module_name, package_name in missing_packages:
         print(f"  - Installing {package_name}...")
@@ -243,7 +299,8 @@ if failed_imports:
     print("   which python3", file=sys.stderr)
     print("2. Install packages for the correct Python:", file=sys.stderr)
     for module_name, package_name, error in failed_imports:
-        print(f"   {sys.executable} -m pip install {package_name}", file=sys.stderr)
+        judge_python = os.environ.get('JUDGE_PYTHON', sys.executable)
+        print(f"   {judge_python} -m pip install {package_name}", file=sys.stderr)
     print("3. Or use conda/mamba if you're in a conda environment", file=sys.stderr)
     sys.exit(1)
 
@@ -257,7 +314,7 @@ if [[ "$init_config" == "true" ]]; then
   # Add Python path for our modules
   export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
   
-  python3 - "$config_file" "$FORCE_MODE" <<'EOF'
+  $JUDGE_PYTHON - "$config_file" "$FORCE_MODE" <<'EOF'
 import sys
 import os
 from pathlib import Path
@@ -327,7 +384,7 @@ if [[ "$scan_models" == "true" ]]; then
     # Add Python path for our modules
     export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
     
-    python3 - <<EOF
+    $JUDGE_PYTHON - <<EOF
 import sys
 try:
     import yaml
@@ -354,7 +411,7 @@ EOF
   export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
   
   # Run the model scanner
-  python3 - "$config_file" <<'EOF'
+  $JUDGE_PYTHON - "$config_file" <<'EOF'
 import sys
 import os
 import json
@@ -619,7 +676,7 @@ if [[ ! -f "$config_file" ]]; then
   export PYTHONPATH="${SCRIPT_DIR}/../lib:${PYTHONPATH:-}"
   
   # Create default config
-  if ! python3 - "$config_file" <<'EOF'
+  if ! $JUDGE_PYTHON - "$config_file" <<'EOF'
 import sys
 try:
     import yaml
@@ -661,7 +718,7 @@ if [[ -n "$model" ]]; then
   model_name="$model"
 else
   # Extract model name from config
-  model_name=$(python3 - "$config_file" <<'EOF' 2>/dev/null || echo "mistralai/mistral-small-2409"
+  model_name=$($JUDGE_PYTHON - "$config_file" <<'EOF' 2>/dev/null || echo "mistralai/mistral-small-2409"
 import sys
 try:
     import yaml
@@ -676,7 +733,7 @@ EOF
 fi
 
 # Validate and download model if needed
-python3 - "$config_file" "$model_name" "$FORCE_MODE" <<'EOF' || exit 1
+$JUDGE_PYTHON - "$config_file" "$model_name" "$FORCE_MODE" <<'EOF' || exit 1
 import sys
 from judge.model_manager import ModelManager
 
@@ -921,7 +978,7 @@ files_list=$(echo "$pr_data" | jq -r '.files[].path' | paste -sd, -)
 pr_data_with_files=$(echo "$pr_data" | jq --arg files "$files_list" '. + {files: ($files | split(","))}')
 
 # Run the Python helper
-review_output=$(python3 "$helper_script" \
+review_output=$($JUDGE_PYTHON "$helper_script" \
   "$config_file" \
   "$pr_data_with_files" \
   "$diff_content" \
