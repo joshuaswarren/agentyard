@@ -157,7 +157,6 @@ This uses the official image, which bundles the server binary in a Docker contai
 
 Verify health:
 curl http://localhost:8948/v1/health
-# expects: {"healthy":true}
 
 If you see {"healthy":true}, your server’s ready to receive messages.
 
