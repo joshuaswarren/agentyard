@@ -1,6 +1,6 @@
 # Agentsmd Guide
 
-The `agentsmd` command manages AGENTS.md files across repositories using a migration-style best practices system. It creates symlinks for CLAUDE.md and GEMINI.md, generates or updates AGENTS.md files with versioned best practices, and uses Claude Code to analyze repositories for project-specific content.
+The `agentsmd` command manages AGENTS.md files across repositories using a migration-style best practices system. It creates symlinks for CLAUDE.md and GEMINI.md, generates or updates AGENTS.md files with versioned best practices, uses Claude Code to analyze repositories for project-specific content, and automatically syncs modular rule files (.mdc) to your project.
 
 ## Quick Start
 
@@ -26,6 +26,8 @@ agentsmd --list-migrations
 4. **Tracks Versions**: Prevents duplicate migrations with `.agentyard-version.yml`
 5. **Caches Results**: Stores Claude analysis results for performance
 6. **Line Wrapping**: Automatically wraps lines to 120 characters while preserving markdown formatting
+7. **Syncs Rule Files**: Automatically copies .mdc rule files to `docs/agentyard/rules/`
+8. **Preserves Local Edits**: Skips syncing rules that have been locally modified
 
 ## How It Works
 
@@ -80,6 +82,34 @@ After all migrations are processed, the AGENTS.md content is automatically wrapp
 
 If the `fmt` command is not available, line wrapping is skipped with a warning.
 
+### Rule System
+
+The rule system provides modular, standalone guidelines that complement the migration-based best practices:
+
+#### What are Rules?
+- **Rules** are .mdc (Markdown with Configuration) files containing specific guidelines
+- They live in `~/agentyard/agentsmd/rules/` and are copied to `docs/agentyard/rules/` in your project
+- Unlike migrations, rules are not processed - they're copied as-is
+- Rules can be organized in subdirectories for categorization
+
+#### Rule Syncing
+- Rules are automatically synced when you run `agentsmd`
+- The system tracks rules using `.agentyard-rules.yml` with checksums
+- If you modify a rule locally, it won't be overwritten by updates
+- New rules are automatically added to your project
+
+#### Rule References
+- All synced rules are referenced at the end of AGENTS.md
+- References use the format: `@docs/agentyard/rules/filename.mdc`
+- AI assistants can access these rules for additional guidance
+
+#### Local Modifications
+When you edit a rule file locally:
+- The system detects the change via checksum comparison
+- The file is skipped during future syncs
+- You'll see a warning about skipped files with local modifications
+- This allows project-specific customization of rules
+
 ## Command Options
 
 | Option | Description |
@@ -105,6 +135,13 @@ The default migrations include:
 4. **004-testing-approach.md**: Testing strategy and commands
 5. **005-file-roadmap.md**: Key files and coding conventions
 6. **006-ai-guidelines.md**: Guidelines for AI assistants
+7. **007-standards.md**: Strict coding standards and requirements
+
+## Available Rules
+
+The default rules include:
+
+1. **commit.mdc**: Guidelines for creating well-formatted commit messages
 
 ## Creating Custom Migrations
 
@@ -136,6 +173,37 @@ Format as actionable guidelines.
 - Always validate user input
 - Use parameterized queries for databases
 ```
+
+## Creating Custom Rules
+
+To add your own rule files:
+
+1. Create a new .mdc file in `~/agentyard/agentsmd/rules/`
+2. Include optional YAML frontmatter for metadata
+3. Write clear, actionable guidelines
+4. Optionally organize in subdirectories
+
+Example custom rule (`~/agentyard/agentsmd/rules/testing/unit-tests.mdc`):
+```markdown
+---
+description: Unit testing guidelines and best practices
+tags: [testing, quality]
+---
+
+# Unit Testing Guidelines
+
+## Test Structure
+- Use descriptive test names that explain what is being tested
+- Follow the Arrange-Act-Assert pattern
+- Keep tests focused on a single behavior
+
+## Coverage Requirements
+- Maintain minimum 90% code coverage
+- Test edge cases and error conditions
+- Mock external dependencies
+```
+
+The rule will be automatically synced to projects and referenced in AGENTS.md.
 
 ## Troubleshooting
 

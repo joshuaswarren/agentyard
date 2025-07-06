@@ -1,0 +1,111 @@
+---
+description: Create well-formatted commits with conventional commit messages
+tags: [git, commits, workflow]
+created: 2025-01-06
+---
+
+# Commit Guidelines
+
+Create well-formatted commits following conventional commit standards and team practices.
+
+## Commit Message Format
+
+Use the conventional commit format:
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+## Commit Types
+
+- `feat`: New features or functionality
+- `fix`: Bug fixes
+- `docs`: Documentation changes only
+- `style`: Code style changes (formatting, semicolons, etc.)
+- `refactor`: Code changes that neither fix bugs nor add features
+- `perf`: Performance improvements
+- `test`: Adding or updating tests
+- `build`: Build system or dependency changes
+- `ci`: CI/CD configuration changes
+- `chore`: Maintenance tasks, tool changes
+- `revert`: Reverting previous commits
+
+## Best Practices
+
+1. **Atomic Commits**: Each commit should represent one logical change
+2. **Present Tense**: Use imperative mood ("Add feature" not "Added feature")
+3. **Clear Subject**: Keep the subject line under 72 characters
+4. **Explain Why**: Use the body to explain what and why, not how
+5. **Reference Issues**: Include issue numbers when applicable (e.g., "Fixes #123")
+
+## Commit Workflow
+
+1. Review changes: `git status` and `git diff`
+2. Stage appropriate files: `git add <files>`
+3. Run pre-commit checks: ensure linters and tests pass
+4. Write clear commit message following the format above
+5. Commit: `git commit`
+
+## Examples
+
+### Good Commits
+```
+feat(auth): add OAuth2 login support
+
+- Implement Google OAuth2 provider
+- Add login/logout endpoints
+- Update user model with OAuth fields
+
+Closes #456
+```
+
+```
+fix(api): prevent null pointer in user lookup
+
+Check if user exists before accessing properties
+to prevent crashes in production.
+
+Fixes #789
+```
+
+### Poor Commits
+- "fix bug" (too vague)
+- "WIP" (use feature branches instead)
+- "Update code" (doesn't explain what or why)
+- "Fixed stuff John asked for" (not descriptive)
+
+## Multi-line Commits
+
+For complex changes, use the extended format:
+```bash
+git commit -m "feat(payments): integrate Stripe checkout" -m "
+- Add Stripe SDK integration
+- Implement checkout session creation
+- Add webhook handlers for payment events
+- Update order model with payment status
+
+This allows customers to complete purchases using
+Stripe's secure checkout process.
+
+Closes #234
+"
+```
+
+## Commit Hooks
+
+The project uses pre-commit hooks. To bypass in emergencies only:
+```bash
+git commit --no-verify -m "hotfix: critical production fix"
+```
+
+## Amending Commits
+
+To fix the last commit (before pushing):
+```bash
+git commit --amend
+```
+
+Remember: Never amend commits that have been pushed to shared branches.

@@ -52,6 +52,7 @@ run_test "Judge Improvements Tests" "./tests/test_judge_improvements.sh"
 run_test "Judge New Features Tests" "./tests/test_judge_new_features.sh"
 run_test "Plan Command Tests" "./tests/test_plan_command.sh"
 run_test "Agentsmd Tests" "./tests/test_agentsmd.sh"
+run_test "Agentsmd Rules Tests" "./tests/test_agentsmd_rules.sh"
 
 # Summary
 echo -e "\n${BLUE}========================================${NC}"
