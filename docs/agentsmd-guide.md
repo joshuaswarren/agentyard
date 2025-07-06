@@ -200,6 +200,8 @@ With `--verbose`, the output shows which tier each item comes from.
 
 ## Command Options
 
+### Main Command Options
+
 | Option | Description |
 |--------|-------------|
 | `-h, --help` | Show help message |
@@ -214,6 +216,161 @@ With `--verbose`, the output shows which tier each item comes from.
 | `-r, --max-retries <n>` | Max retry attempts (default: 2) |
 | `-s, --show-prompts` | Show prompts sent to Claude |
 | `--dry-run` | Preview changes without applying them |
+
+## Dedupe Command
+
+The `agentsmd dedupe` command removes duplicate text blocks from AGENTS.md files and optionally compresses the content using an LLM.
+
+### What It Does
+
+1. **Multi-line Duplicate Detection**: Identifies and removes text blocks that appear multiple times
+   - Only flags content as duplicate if 2+ consecutive lines match exactly
+   - Preserves single-line duplicates like common headers (e.g., "**Current Implementation:**")
+   - Blank lines don't count toward the consecutive line requirement
+
+2. **LLM-based Compression**: After deduplication, uses an LLM to compress the file
+   - Three compression levels: light, moderate (default), aggressive
+   - Maintains exact meaning and technical accuracy
+   - Reduces token count while keeping content readable
+
+3. **Smart Backups**: Creates timestamped backups in `~/agentyard/backups/<project-name>/`
+   - Pre-dedupe backup before any changes
+   - Post-dedupe backup after removing duplicates
+   - Final backup after compression
+
+4. **File Size Validation**: Prevents processing files larger than 200,000 tokens
+
+### Usage
+
+```bash
+# Remove duplicates and apply moderate compression (default)
+agentsmd dedupe
+
+# Preview changes without applying them
+agentsmd dedupe --dry-run
+
+# Skip compression, only remove duplicates
+agentsmd dedupe --skip-compression
+
+# Use aggressive compression
+agentsmd dedupe --compression-level aggressive
+
+# Use light compression
+agentsmd dedupe --compression-level light
+
+# Show detailed progress
+agentsmd dedupe --verbose
+
+# Use a specific OpenAI model
+agentsmd dedupe --model gpt-4
+```
+
+### Dedupe Options
+
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Preview changes without applying them |
+| `--verbose` | Show detailed progress and API interactions |
+| `--skip-compression` | Skip compression step after deduplication |
+| `--compression-level` | Compression level: light, moderate (default), aggressive |
+| `--model` | OpenAI model to use (default: o3 or OPENAI_MODEL env var) |
+| `--timeout` | Timeout for API calls in seconds (default: 600) |
+| `--max-retries` | Maximum retry attempts for API calls (default: 3) |
+
+### Compression Levels
+
+- **Light**: Minimal compression, removes only obvious redundancy
+  - Keeps all essential information and context
+  - Simplifies verbose explanations
+  - Best for files that are already well-written
+
+- **Moderate** (default): Balanced compression
+  - Condenses explanations to core points
+  - Removes redundant examples when pattern is clear
+  - Combines related points when possible
+  - Good for most use cases
+
+- **Aggressive**: Maximum compression while preserving meaning
+  - Keeps only essential information
+  - Uses most concise phrasing possible
+  - Removes all redundancy
+  - Best when token count is critical
+
+### Backup Structure
+
+Backups are organized by project and timestamp:
+```
+~/agentyard/backups/
+  └── <project-name>/
+      ├── AGENTS.md.2024-01-15-143022.pre-dedupe.backup
+      ├── AGENTS.md.2024-01-15-143022.post-dedupe.backup
+      └── AGENTS.md.2024-01-15-143022.final.backup
+```
+
+### Examples
+
+#### Basic Deduplication
+```bash
+$ agentsmd dedupe
+[agentsmd] Analyzing AGENTS.md (5,234 words, 412 lines, ~5,234 tokens)
+[agentsmd] Found 3 duplicate text block(s):
+
+Duplicate #1:
+  First occurrence: line 45
+  Duplicate locations: lines 123, 267
+  Total occurrences: 3
+  Text preview: '## Setup Instructions\nFollow these steps...'
+
+[agentsmd] Removing 6 duplicate lines...
+[agentsmd] Token reduction from deduplication: 5,234 → 4,987 (247 tokens saved)
+
+[agentsmd] Compressing with moderate level...
+[agentsmd] Token reduction from compression: 4,987 → 3,240 (1,747 tokens saved)
+[agentsmd] Total token reduction: 5,234 → 3,240 (38.1% reduction)
+
+✅ Deduplication and compression complete!
+```
+
+#### Dry Run Mode
+```bash
+$ agentsmd dedupe --dry-run
+[agentsmd] Found 2 duplicate text block(s)
+[agentsmd] --dry-run mode: No changes will be made
+[agentsmd] Would remove 4 duplicate occurrences
+[agentsmd] Would then apply moderate compression
+```
+
+#### Skip Compression
+```bash
+$ agentsmd dedupe --skip-compression
+[agentsmd] Found 1 duplicate text block(s)
+[agentsmd] Removing 2 duplicate lines...
+✅ Deduplication complete! Removed 2 lines
+```
+
+### Troubleshooting
+
+#### File Too Large Error
+```
+Error: AGENTS.md exceeds maximum size of 200,000 tokens
+```
+**Solution**: Reduce the file size by removing unnecessary sections or splitting into multiple files.
+
+#### API Key Missing
+```
+Error: OPENAI_API_KEY environment variable not set
+```
+**Solution**: Set your OpenAI API key:
+```bash
+export OPENAI_API_KEY='your-api-key'
+```
+
+#### No Duplicates Found
+```
+No duplicates found in AGENTS.md
+No changes needed
+```
+This is normal if your file doesn't contain multi-line duplicates.
 
 ## Available Migrations
 
