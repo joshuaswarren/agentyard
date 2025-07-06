@@ -110,6 +110,94 @@ When you edit a rule file locally:
 - You'll see a warning about skipped files with local modifications
 - This allows project-specific customization of rules
 
+### Multi-Repository Support (Three-Tier System)
+
+Agentsmd now supports a three-tier repository system for both rules and migrations, allowing teams and individuals to add their own customizations without modifying the public repository.
+
+#### Repository Tiers
+
+1. **Public** (`~/agentyard/`): Base agentyard repository with default migrations and rules
+2. **Team** (`~/agentyard-team/`): Team-specific customizations shared across team members
+3. **Private** (`~/agentyard-private/`): Personal customizations for individual developers
+
+#### How It Works
+
+- **Priority**: private > team > public (higher tiers override lower tiers)
+- **Rules**: Higher-tier rules override lower-tier rules with the same path
+- **Migrations**: All migrations are additive - no overrides, just additions
+- **Version Tracking**: Each tier tracks its own version independently
+
+#### Version File Structure
+
+The `.agentyard-version.yml` file now tracks versions for all three tiers:
+
+```yaml
+agentsmd:
+  version: 7          # public version
+  team_version: 3     # team version
+  private_version: 1  # private version
+  applied_at: "..."
+  cache_key: "..."
+```
+
+#### Directory Structure
+
+Each repository follows the same structure:
+```
+~/agentyard/agentsmd/
+├── best-practices/   # Migration files
+├── rules/            # Rule files (.mdc)
+├── cache/            # Claude analysis cache
+├── lib/              # Library files
+└── templates/        # Templates
+
+~/agentyard-team/agentsmd/
+├── best-practices/   # Team-specific migrations
+└── rules/            # Team-specific rules
+
+~/agentyard-private/agentsmd/
+├── best-practices/   # Personal migrations
+└── rules/            # Personal rules
+```
+
+#### Override Behavior
+
+**For Rules:**
+- If `commit.mdc` exists in both public and team repos, the team version wins
+- If it also exists in private repo, the private version wins
+- Use `--verbose` to see which tier each rule comes from
+
+**For Migrations:**
+- All migrations from all tiers are applied
+- Public migrations 001-007 are applied first
+- Then team migrations (e.g., 008-010)
+- Then private migrations (e.g., 011-012)
+- Each tier maintains its own version counter
+
+#### Dry Run Mode
+
+Use `--dry-run` to preview what would happen without making changes:
+```bash
+agentsmd --dry-run --verbose
+```
+
+This shows:
+- Which migrations would be applied and from which tier
+- Which rules would be synced or overridden
+- Any conflicts between tiers
+
+#### Viewing Available Items
+
+```bash
+# List all migrations across all tiers
+agentsmd --list-migrations --verbose
+
+# List all rules across all tiers
+agentsmd --list-rules --verbose
+```
+
+With `--verbose`, the output shows which tier each item comes from.
+
 ## Command Options
 
 | Option | Description |
@@ -120,10 +208,12 @@ When you edit a rule file locally:
 | `-n, --no-cache` | Force fresh Claude analysis |
 | `-p, --project <path>` | Target specific directory |
 | `-l, --list-migrations` | Show available migrations |
+| `--list-rules` | Show available rules |
 | `-m, --model <model>` | Claude model to use (default: sonnet) |
 | `-t, --timeout <secs>` | Timeout per Claude call (default: 60) |
 | `-r, --max-retries <n>` | Max retry attempts (default: 2) |
 | `-s, --show-prompts` | Show prompts sent to Claude |
+| `--dry-run` | Preview changes without applying them |
 
 ## Available Migrations
 
