@@ -281,7 +281,7 @@ EOF
 # ---- send Claude command if requested ---------------------------------------
 if [[ -n "$claude_command" ]]; then
   # Send command after 3 second delay to ensure Claude is ready
-  (sleep 3 && tmux send-keys -t "$session_name" "$claude_command" C-m) &
+  (sleep 3 && tmux send-keys -t "$session_name" "$claude_command" Enter C-m) &
 fi
 
 # ---- attach to the tmux session ---------------------------------------------
