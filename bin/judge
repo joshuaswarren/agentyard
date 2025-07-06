@@ -1052,23 +1052,45 @@ echo "📝 Preparing AI review with $(echo "$diff_content" | wc -l) lines of dif
 echo "   Model: ${model:-default from config}"
 echo "   Files: $files_list"
 
-# Run with error capture
-review_output=$($JUDGE_PYTHON "$helper_script" \
+# Run with error capture and timeout
+# Set a timeout of 5 minutes for the AI review
+timeout_cmd="timeout"
+if command -v gtimeout >/dev/null 2>&1; then
+  timeout_cmd="gtimeout"  # macOS with coreutils
+fi
+
+review_output=$($timeout_cmd 300 $JUDGE_PYTHON "$helper_script" \
   "$config_file" \
   "$pr_data_with_files" \
   "$diff_content" \
   ${model:+--model "$model"} 2>&1) || {
     exit_code=$?
-    echo -e "${RED}Error: AI review failed (exit code: $exit_code)${NC}" >&2
-    echo -e "${RED}Error output:${NC}" >&2
-    echo "$review_output" >&2
     
-    # Common troubleshooting tips
-    echo -e "\n${YELLOW}Troubleshooting tips:${NC}" >&2
-    echo "1. Check if the model file exists and is accessible" >&2
-    echo "2. Ensure you have enough RAM for the model (8GB+ recommended)" >&2
-    echo "3. Try with a smaller model using --model flag" >&2
-    echo "4. Check the log output above for specific errors" >&2
+    if [[ $exit_code -eq 124 ]] || [[ $exit_code -eq 143 ]]; then
+      # Timeout occurred
+      echo -e "${RED}Error: AI review timed out after 5 minutes${NC}" >&2
+      echo -e "${YELLOW}This usually means:${NC}" >&2
+      echo "1. The model is too large for your system" >&2
+      echo "2. The PR diff is too complex" >&2
+      echo "3. Insufficient RAM or CPU resources" >&2
+      echo "" >&2
+      echo -e "${YELLOW}Try these solutions:${NC}" >&2
+      echo "1. Use a smaller/faster model:" >&2
+      echo "   judge $pr_number --model lmstudio-community/mathstral-7B-v0.1-GGUF" >&2
+      echo "2. Run 'judge scan-models' to see available models" >&2
+      echo "3. Close other applications to free up RAM" >&2
+    else
+      echo -e "${RED}Error: AI review failed (exit code: $exit_code)${NC}" >&2
+      echo -e "${RED}Error output:${NC}" >&2
+      echo "$review_output" >&2
+      
+      # Common troubleshooting tips
+      echo -e "\n${YELLOW}Troubleshooting tips:${NC}" >&2
+      echo "1. Check if the model file exists and is accessible" >&2
+      echo "2. Ensure you have enough RAM for the model (8GB+ recommended)" >&2
+      echo "3. Try with a smaller model using --model flag" >&2
+      echo "4. Check the log output above for specific errors" >&2
+    fi
     
     exit 1
   }
