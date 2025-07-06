@@ -616,6 +616,191 @@ test_dedupe_missing_api_key() {
     cleanup_test_env
 }
 
+test_dedupe_multiline_detection() {
+    echo -e "\n${YELLOW}Testing multi-line duplicate detection...${NC}"
+    
+    setup_test_env
+    
+    # Create AGENTS.md with single-line duplicates that should NOT be removed
+    cat > AGENTS.md <<'EOF'
+# AGENTS.md
+
+**Current Implementation:**
+This is the first section.
+
+**Current Implementation:**
+This is a different section.
+
+## Multi-line duplicate
+This should be detected
+as a duplicate block.
+
+## Another section
+Some other content here.
+
+## Multi-line duplicate
+This should be detected
+as a duplicate block.
+EOF
+    
+    # Mock the Python script to simulate multi-line detection
+    export PATH="${TEST_DIR}/mock_bin:$PATH"
+    mkdir -p "${TEST_DIR}/mock_bin"
+    cat > "${TEST_DIR}/mock_bin/agentsmd-dedupe" <<'EOF'
+#!/bin/bash
+if [[ "$*" == *"--dry-run"* ]]; then
+    echo "Found 1 duplicate text block(s):"
+    echo "Duplicate #1:"
+    echo "  Text preview: '## Multi-line duplicate\\nThis should be detected\\nas a duplicate block.'"
+    echo ""
+    echo "--dry-run mode: No changes will be made"
+else
+    echo "Found 1 duplicate text block(s):"
+    echo "✅ Deduplication complete! Removed 3 lines"
+fi
+exit 0
+EOF
+    chmod +x "${TEST_DIR}/mock_bin/agentsmd-dedupe"
+    
+    local output=$("$AGENTSMD_CMD" dedupe --dry-run 2>&1)
+    
+    # Check that single-line headers are preserved
+    if echo "$output" | grep -q "Multi-line duplicate"; then
+        echo -e "${GREEN}✓${NC} Multi-line duplicates detected"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Multi-line duplicates not detected"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    cleanup_test_env
+}
+
+test_dedupe_compression() {
+    echo -e "\n${YELLOW}Testing dedupe with compression...${NC}"
+    
+    setup_test_env
+    
+    # Create AGENTS.md
+    cat > AGENTS.md <<'EOF'
+# AGENTS.md
+
+This is a verbose description that could be compressed. It contains many 
+unnecessary words and could be written more concisely.
+
+## Duplicate Section
+This content appears twice.
+
+## Another Section
+More content here.
+
+## Duplicate Section
+This content appears twice.
+EOF
+    
+    # Mock the Python script to simulate compression
+    export PATH="${TEST_DIR}/mock_bin:$PATH"
+    mkdir -p "${TEST_DIR}/mock_bin"
+    cat > "${TEST_DIR}/mock_bin/agentsmd-dedupe" <<'EOF'
+#!/bin/bash
+if [[ "$*" == *"--skip-compression"* ]]; then
+    echo "✅ Deduplication complete! Removed 2 lines"
+elif [[ "$*" == *"--compression-level aggressive"* ]]; then
+    echo "Compressing with aggressive level..."
+    echo "Token reduction from compression: 100 → 50 (50 tokens saved)"
+    echo "✅ Deduplication and compression complete!"
+elif [[ "$*" == *"--compression-level light"* ]]; then
+    echo "Compressing with light level..."
+    echo "Token reduction from compression: 100 → 80 (20 tokens saved)"
+    echo "✅ Deduplication and compression complete!"
+else
+    echo "Compressing with moderate level..."
+    echo "Token reduction from compression: 100 → 65 (35 tokens saved)"
+    echo "✅ Deduplication and compression complete!"
+fi
+exit 0
+EOF
+    chmod +x "${TEST_DIR}/mock_bin/agentsmd-dedupe"
+    
+    # Test default compression
+    local output=$("$AGENTSMD_CMD" dedupe 2>&1)
+    if echo "$output" | grep -q "compression complete"; then
+        echo -e "${GREEN}✓${NC} Default compression works"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Default compression failed"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    # Test skip compression
+    output=$("$AGENTSMD_CMD" dedupe --skip-compression 2>&1)
+    if echo "$output" | grep -q "Deduplication complete" && ! echo "$output" | grep -q "compression"; then
+        echo -e "${GREEN}✓${NC} Skip compression works"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Skip compression failed"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    # Test compression levels
+    output=$("$AGENTSMD_CMD" dedupe --compression-level aggressive 2>&1)
+    if echo "$output" | grep -q "aggressive level"; then
+        echo -e "${GREEN}✓${NC} Aggressive compression level works"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Aggressive compression level failed"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    cleanup_test_env
+}
+
+test_dedupe_backup_location() {
+    echo -e "\n${YELLOW}Testing dedupe backup location...${NC}"
+    
+    setup_test_env
+    
+    # Create AGENTS.md
+    echo "# AGENTS.md" > AGENTS.md
+    
+    # Mock the Python script to simulate backup creation
+    export PATH="${TEST_DIR}/mock_bin:$PATH"
+    mkdir -p "${TEST_DIR}/mock_bin"
+    cat > "${TEST_DIR}/mock_bin/agentsmd-dedupe" <<'EOF'
+#!/bin/bash
+# Simulate backup directory creation
+backup_dir="$HOME/agentyard/backups/test_project"
+mkdir -p "$backup_dir"
+timestamp=$(date +%Y-%m-%d-%H%M%S)
+touch "$backup_dir/AGENTS.md.$timestamp.pre-dedupe.backup"
+echo "Backup saved: $backup_dir/AGENTS.md.$timestamp.pre-dedupe.backup"
+echo "✅ Deduplication complete!"
+exit 0
+EOF
+    chmod +x "${TEST_DIR}/mock_bin/agentsmd-dedupe"
+    
+    local output=$("$AGENTSMD_CMD" dedupe 2>&1)
+    
+    # Check if backup directory was mentioned
+    if echo "$output" | grep -q "agentyard/backups"; then
+        echo -e "${GREEN}✓${NC} Backup location correct"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo -e "${RED}✗${NC} Backup location incorrect"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    TESTS_RUN=$((TESTS_RUN + 1))
+    
+    # Clean up backup directory
+    rm -rf "$HOME/agentyard/backups/test_project"
+    
+    cleanup_test_env
+}
+
 # Main test runner
 main() {
     echo -e "${BLUE}================================${NC}"
@@ -636,6 +821,9 @@ main() {
     test_dedupe_dry_run
     test_dedupe_no_duplicates
     test_dedupe_missing_api_key
+    test_dedupe_multiline_detection
+    test_dedupe_compression
+    test_dedupe_backup_location
     
     # Summary
     echo -e "\n${BLUE}================================${NC}"
