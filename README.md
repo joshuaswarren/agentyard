@@ -1,10 +1,12 @@
-# agentyard
-
 Agentyard
 =========
 
+# agentyard
+
+**Agentyard** is a workflow orchestration system designed for developers working with AI coding assistants. Born from real-world experience managing many concurrent AI coding sessions, it provides the infrastructure layer between human developers and AI agents. The system creates isolated, disposable workspaces for each coding task, automatically integrates with Claude Code and other AI assistants, and maintains clean git hygiene through its one-worktree-per-branch architecture. Whether you're exploring agentic coding patterns, building AI-powered development workflows, or scaling AI-assisted engineering across teams, Agentyard provides practical tools for managing AI-enhanced development workflows. This is workspace-as-code for the AI era.
+
 Public scaffolding for running multiple AI coding sessions with tmux.
-- bin/: CLI helpers (mkworktree, sesh-pick, jump-*)
+- bin/: CLI helpers (starttask, finishtask, sesh-pick, jump-*)
 - tmuxp/public/: example layouts
 License: GPL‑3.0‑or‑later
 
@@ -38,11 +40,11 @@ cleanup-worktrees                           # weekly cleanup of merged worktrees
 list-tasks                                  # show all active tasks
 sync-active-tasks                           # sync active tasks file with actual state
 judge 45                                    # AI-powered review of PR #45 using local LLM
-judge scan-models                           # Scan for models and update configuration  
-/plan "implement feature X"                 # Interactive planning with codebase analysis
+judge scan-models                           # Scan for models and update configuration
 agentsmd                                    # Create/update AGENTS.md with AI analysis
-create-agents-file claude                   # Create CLAUDE.md file for AI assistance
+agentsmd-dedupe                             # Deduplicate rules in AGENTS.md files
 mentor                                      # AI-powered code review of recent commits using OpenAI
+setup-claude-commands.sh                    # Link Claude commands to ~/.claude/commands
 
 ## New Features
 
@@ -85,7 +87,9 @@ mentor                                      # AI-powered code review of recent c
 - **Smart PR Resolution**: Review by PR number or branch name
 - See [Judge Command Guide](docs/judge-command-guide.md) for setup and usage
 
-### Interactive Planning with /plan Command
+### Interactive Planning with Claude Code's /plan Command
+- **Note**: `/plan` is a Claude Code command, not a shell command
+- **Usage**: After running `starttask`, use `/plan` within Claude Code
 - **Codebase Analysis**: Automatically analyzes relevant files before planning
 - **Interactive Questions**: Asks clarifying questions to create better plans
 - **GitHub Integration**: Updates issue descriptions with generated plans
@@ -110,17 +114,13 @@ mentor                                      # AI-powered code review of recent c
   - `mentor abc123 def456` - Review commit range
   - `mentor --model gpt-4` - Use specific model origin/main
 
-### AI Agent Instruction Files with create-agents-file
-- **Quick Generation**: Create CLAUDE.md or GEMINI.md files for AI coding assistants
-- **Multiple Templates**: Choose from basic, full, or custom interactive templates
-- **Project Context**: Helps AI understand your architecture, conventions, and requirements
-- **Dry Run Mode**: Preview generated content before creating files
-- **Flexible Options**: Specify project directory, overwrite existing files
-- **Usage Examples**:
-  - `create-agents-file claude` - Create basic CLAUDE.md in current directory
-  - `create-agents-file gemini --template full` - Create comprehensive GEMINI.md
-  - `create-agents-file claude --project ~/work/myapp --overwrite` - Create in specific project
-- See [Create Agents File Guide](docs/create-agents-file-guide.md) for detailed usage
+### AI Agent Instruction Files Management
+- **agentsmd**: Manages AGENTS.md files with migration system and Claude analysis
+- **agentsmd-dedupe**: Removes duplicate rules from AGENTS.md files
+  - Detects exact duplicates and multi-line duplicates
+  - Optionally uses LLM for intelligent deduplication
+  - Usage: `agentsmd-dedupe` or `agentsmd-dedupe --llm` for AI-powered deduplication
+- **Note**: CLAUDE.md and GEMINI.md are created as symlinks to AGENTS.md by agentsmd
 
 ### AI-Powered AGENTS.md Management with agentsmd
 - **Migration System**: Uses numbered best practice files that apply in order
@@ -171,3 +171,6 @@ I recommend setting this up on a device that's connected to Tailscale and also c
 2. run install_claude_ntfy_hooks.sh to install the notification hooks
 
 3. Subscribe to the topic claudecode on your ntfy server using the ntfy app on your mobile device(s)
+
+### Additional Setup
+- **Claude Commands**: Run `setup-claude-commands.sh` to link command templates from all three repos to `~/.claude/commands`
