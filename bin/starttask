@@ -26,22 +26,108 @@ prog=$(basename "$0")
 
 usage() {
   cat <<EOF
-Usage: $prog <project> <branch> [slug]
+Usage: $prog <project> <branch> [slug] [--plan|-p [issue] [message]] [--implement|-i [issue] [message]]
 
   project  repo folder under \$HOME/work
   branch   branch name for the task (created fresh from origin/main)
   slug     optional identifier (auto-numbered if omitted)
 
-Examples
+Options:
+  --plan, -p [issue] [message]      Send /plan command to Claude Code
+  --implement, -i [issue] [message]  Send /implement-gh-issue command to Claude Code
+
+Examples:
   $prog deckard feature/new-ui          # auto slug 001 → session deckard-001
   $prog deckard bugfix/login-issue 007  # explicit slug → session deckard-007
+  
+  # With Claude commands:
+  $prog deckard feature/auth -p 123    # Send: /plan GitHub issue 123
+  $prog deckard bugfix/memory --implement 456 "prioritize performance"
+  $prog deckard feature/ui 007 --plan 789 "use React components"
 
 Note: Each worktree is single-branch and disposable. Use finishtask to clean up.
 EOF
 }
 
 # ---- handle flags / mis‑use -------------------------------------------------
-if [[ ${1:-} = "-h" || ${1:-} = "--help" || $# -lt 2 ]]; then
+# Initialize variables for Claude commands
+claude_command=""
+plan_flag=""
+implement_flag=""
+
+# Parse all arguments to handle flags anywhere in the command line
+args=()
+i=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage; exit 0
+      ;;
+    -p|--plan)
+      if [[ -n "$implement_flag" ]]; then
+        echo "Error: Cannot use both --plan and --implement flags" >&2
+        exit 1
+      fi
+      plan_flag="true"
+      shift
+      # Collect the rest of the arguments for the plan command
+      plan_args=""
+      while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
+        if [[ -z "$plan_args" ]]; then
+          plan_args="$1"
+        else
+          plan_args="$plan_args $1"
+        fi
+        shift
+      done
+      if [[ -n "$plan_args" ]]; then
+        # Check if first arg is a number (issue number)
+        first_arg="${plan_args%% *}"
+        if [[ "$first_arg" =~ ^[0-9]+$ ]]; then
+          claude_command="/plan GitHub issue $plan_args"
+        else
+          # No issue number, just message
+          claude_command="/plan GitHub issue $plan_args"
+        fi
+      else
+        claude_command="/plan"
+      fi
+      ;;
+    -i|--implement)
+      if [[ -n "$plan_flag" ]]; then
+        echo "Error: Cannot use both --plan and --implement flags" >&2
+        exit 1
+      fi
+      implement_flag="true"
+      shift
+      # Collect the rest of the arguments for the implement command
+      impl_args=""
+      while [[ $# -gt 0 ]] && [[ ! "$1" =~ ^- ]]; do
+        if [[ -z "$impl_args" ]]; then
+          impl_args="$1"
+        else
+          impl_args="$impl_args $1"
+        fi
+        shift
+      done
+      if [[ -n "$impl_args" ]]; then
+        claude_command="/implement-gh-issue $impl_args"
+      else
+        claude_command="/implement-gh-issue"
+      fi
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Restore positional parameters from args array
+set -- "${args[@]}"
+
+# Now check for minimum required arguments
+if [[ $# -lt 2 ]]; then
   usage; exit 1
 fi
 
@@ -191,6 +277,12 @@ When done with this task:
 
 Attaching to session...
 EOF
+
+# ---- send Claude command if requested ---------------------------------------
+if [[ -n "$claude_command" ]]; then
+  # Send command after 3 second delay to ensure Claude is ready
+  (sleep 3 && tmux send-keys -t "$session_name" "$claude_command" C-m) &
+fi
 
 # ---- attach to the tmux session ---------------------------------------------
 exec tmux attach -t "$session_name"

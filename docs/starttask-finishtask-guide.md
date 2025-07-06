@@ -22,13 +22,17 @@ The `starttask` and `finishtask` commands form the core of Agentyard's ephemeral
 
 ### Basic Syntax
 ```bash
-starttask <project> <branch> [slug]
+starttask <project> <branch> [slug] [--plan|-p [issue] [message]] [--implement|-i [issue] [message]]
 ```
 
 ### Parameters
 - `<project>`: The name of your project (must have a git repo at `~/work/<project>`)
 - `<branch>`: The git branch name to create (e.g., `feature/new-ui`, `bugfix/login-issue`)
 - `[slug]`: Optional 3-digit identifier (001-999). If omitted, auto-increments from highest existing
+- `--plan, -p`: Optional flag to send `/plan` command to Claude Code after startup
+- `--implement, -i`: Optional flag to send `/implement-gh-issue` command to Claude Code after startup
+- `[issue]`: Optional issue number to include with the command
+- `[message]`: Optional additional text to include with the command
 
 ### What Starttask Does
 
@@ -67,6 +71,12 @@ starttask <project> <branch> [slug]
    - Auto-generates `jump-<project>` command on first use
    - Uses sesh + fzf for fuzzy project session selection
 
+7. **Sends Claude commands (if flags provided)**
+   - Waits 3 seconds after session attachment to ensure Claude Code is ready
+   - Sends `/plan GitHub issue <number> <message>` if --plan/-p flag is used
+   - Sends `/implement-gh-issue <number> <message>` if --implement/-i flag is used
+   - Commands appear in Claude Code interface and are executed automatically
+
 ### Examples
 
 ```bash
@@ -78,6 +88,12 @@ starttask myapp bugfix/crash-on-save 042
 
 # Working with existing project
 starttask deckard feature/api-update
+
+# With Claude command flags
+starttask myapp feature/auth -p 123              # Sends: /plan GitHub issue 123
+starttask myapp bugfix/memory --implement 456    # Sends: /implement-gh-issue 456
+starttask myapp feature/ui 007 --plan 789 "use React components"
+starttask myapp refactor/cleanup -i "improve error handling"
 ```
 
 ### Auto-numbering Details
