@@ -20,14 +20,38 @@ prog=$(basename "$0")
 # Configuration
 # Determine if we're in development (agentyard repo) or production
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Configure multi-tier repository paths
+declare -a AGENTSMD_REPOS=()
+declare -a TIER_NAMES=()
+
+# Always check public repo first
 if [[ -d "${SCRIPT_DIR}/../agentsmd" ]]; then
   # Development mode - use local agentsmd directory
-  AGENTSMD_ROOT="${SCRIPT_DIR}/../agentsmd"
+  AGENTSMD_REPOS+=("${SCRIPT_DIR}/../agentsmd")
+  TIER_NAMES+=("public")
 else
   # Production mode - use ~/agentyard/agentsmd
-  AGENTSMD_ROOT="${HOME}/agentyard/agentsmd"
+  if [[ -d "${HOME}/agentyard/agentsmd" ]]; then
+    AGENTSMD_REPOS+=("${HOME}/agentyard/agentsmd")
+    TIER_NAMES+=("public")
+  fi
 fi
 
+# Check for team repo
+if [[ -d "${HOME}/agentyard-team/agentsmd" ]]; then
+  AGENTSMD_REPOS+=("${HOME}/agentyard-team/agentsmd")
+  TIER_NAMES+=("team")
+fi
+
+# Check for private repo
+if [[ -d "${HOME}/agentyard-private/agentsmd" ]]; then
+  AGENTSMD_REPOS+=("${HOME}/agentyard-private/agentsmd")
+  TIER_NAMES+=("private")
+fi
+
+# Primary directories still come from public repo for backward compatibility
+AGENTSMD_ROOT="${AGENTSMD_REPOS[0]:-${HOME}/agentyard/agentsmd}"
 BEST_PRACTICES_DIR="${AGENTSMD_ROOT}/best-practices"
 CACHE_DIR="${AGENTSMD_ROOT}/cache"
 TEMPLATES_DIR="${AGENTSMD_ROOT}/templates"
@@ -40,6 +64,7 @@ CHECK_ONLY=false
 VERBOSE=false
 NO_CACHE=false
 LIST_MIGRATIONS=false
+LIST_RULES=false
 CLAUDE_MODEL="sonnet"
 TIMEOUT=600
 MAX_RETRIES=2
@@ -73,13 +98,14 @@ Options:
   -n, --no-cache          Force fresh Claude analysis
   -p, --project <path>    Target specific directory (default: current)
   -l, --list-migrations   Show all available migrations
+  --list-rules            Show all available rules
   -m, --model <model>     Claude model to use (default: sonnet)
   -t, --timeout <secs>    Timeout per Claude call (default: 600)
   -r, --max-retries <n>   Max retry attempts (default: 2)
   -s, --show-prompts      Show prompts being sent to Claude
+  --dry-run               Preview changes without applying them
 
 Dedupe Options:
-  --dry-run              Preview changes without applying them
   --openai-model <model> OpenAI model to use (default: o3)
 
 Examples:
@@ -124,6 +150,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -l|--list-migrations)
       LIST_MIGRATIONS=true
+      shift
+      ;;
+    --list-rules)
+      LIST_RULES=true
       shift
       ;;
     -m|--model)
@@ -182,6 +212,25 @@ log_warning() {
   echo -e "${YELLOW}[agentsmd]${NC} $*"
 }
 
+# Log with tier indicator
+log_tier() {
+  local tier="$1"
+  shift
+  local tier_tag=""
+  case "$tier" in
+    public)
+      tier_tag="${GREEN}[public]${NC}"
+      ;;
+    team)
+      tier_tag="${BLUE}[team]${NC}"
+      ;;
+    private)
+      tier_tag="${YELLOW}[private]${NC}"
+      ;;
+  esac
+  echo -e "${BLUE}[agentsmd]${NC} ${tier_tag} $*"
+}
+
 # Check if a command exists
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -195,20 +244,87 @@ ensure_directories() {
   mkdir -p "$LIB_DIR"
 }
 
+# List available rules
+list_rules() {
+  log "Available rules:"
+  local found_any=false
+  
+  # Iterate through all repos
+  for i in "${!AGENTSMD_REPOS[@]}"; do
+    local repo_root="${AGENTSMD_REPOS[$i]}"
+    local tier="${TIER_NAMES[$i]}"
+    local rules_dir="${repo_root}/rules"
+    
+    if [[ -d "$rules_dir" ]]; then
+      local tier_rules=()
+      while IFS= read -r -d '' rule; do
+        tier_rules+=("$rule")
+      done < <(find "$rules_dir" -name "*.mdc" -type f -print0 | sort -z)
+      
+      if [[ ${#tier_rules[@]} -gt 0 ]]; then
+        found_any=true
+        if [[ "$VERBOSE" == "true" ]]; then
+          log_tier "$tier" "Rules from $rules_dir:"
+        fi
+        
+        for rule in "${tier_rules[@]}"; do
+          local relative_path="${rule#$rules_dir/}"
+          # Extract description from frontmatter
+          local desc=$(awk '/^---$/{if(++n==2)exit} /^description:/{gsub(/^description:[[:space:]]*/, ""); print}' "$rule" 2>/dev/null || echo "")
+          if [[ "$VERBOSE" == "true" ]]; then
+            printf "  %-30s %s ${GREEN}[%s]${NC}\n" "$relative_path" "$desc" "$tier"
+          else
+            printf "  %-30s %s\n" "$relative_path" "$desc"
+          fi
+        done
+      fi
+    fi
+  done
+  
+  if [[ "$found_any" == "false" ]]; then
+    log_error "No rules found in any configured repository"
+  fi
+}
+
 # List available migrations
 list_migrations() {
   log "Available migrations:"
-  if [[ -d "$BEST_PRACTICES_DIR" ]]; then
-    for migration in "$BEST_PRACTICES_DIR"/*.md; do
-      if [[ -f "$migration" ]]; then
-        basename=$(basename "$migration")
-        # Extract description from first comment line if present
-        desc=$(grep -m1 '^# Description:' "$migration" 2>/dev/null | sed 's/# Description: //' || echo "")
-        printf "  %-30s %s\n" "$basename" "$desc"
+  local found_any=false
+  
+  # Iterate through all repos
+  for i in "${!AGENTSMD_REPOS[@]}"; do
+    local repo_root="${AGENTSMD_REPOS[$i]}"
+    local tier="${TIER_NAMES[$i]}"
+    local practices_dir="${repo_root}/best-practices"
+    
+    if [[ -d "$practices_dir" ]]; then
+      local tier_migrations=()
+      while IFS= read -r -d '' migration; do
+        tier_migrations+=("$migration")
+      done < <(find "$practices_dir" -name "*.md" -type f -print0 | sort -z)
+      
+      if [[ ${#tier_migrations[@]} -gt 0 ]]; then
+        found_any=true
+        if [[ "$VERBOSE" == "true" ]]; then
+          log_tier "$tier" "Migrations from $practices_dir:"
+        fi
+        
+        for migration in "${tier_migrations[@]}"; do
+          local basename=$(basename "$migration")
+          # Extract description from first comment line if present
+          local desc=$(grep -m1 '^# Description:' "$migration" 2>/dev/null | sed 's/# Description: //' || echo "")
+          if [[ "$VERBOSE" == "true" ]]; then
+            printf "  %-30s %s ${GREEN}[%s]${NC}\n" "$basename" "$desc" "$tier"
+          else
+            printf "  %-30s %s\n" "$basename" "$desc"
+          fi
+        done
       fi
-    done
-  else
-    log_error "No migrations directory found at $BEST_PRACTICES_DIR"
+    fi
+  done
+  
+  if [[ "$found_any" == "false" ]]; then
+    log_error "No migrations found in any configured repository"
   fi
 }
 
@@ -416,6 +532,7 @@ process_migration() {
 # Read version file
 read_version_file() {
   local version_file="$1"
+  local tier="${2:-public}"  # Default to public tier
   
   if [[ ! -f "$version_file" ]]; then
     echo "0"
@@ -424,22 +541,47 @@ read_version_file() {
   
   # Use yq if available, otherwise parse manually
   if command_exists yq; then
-    yq eval '.agentsmd.version // 0' "$version_file" 2>/dev/null || echo "0"
+    case "$tier" in
+      public)
+        yq eval '.agentsmd.version // 0' "$version_file" 2>/dev/null || echo "0"
+        ;;
+      team)
+        yq eval '.agentsmd.team_version // 0' "$version_file" 2>/dev/null || echo "0"
+        ;;
+      private)
+        yq eval '.agentsmd.private_version // 0' "$version_file" 2>/dev/null || echo "0"
+        ;;
+    esac
   else
-    grep -m1 'version:' "$version_file" 2>/dev/null | sed 's/.*version:[[:space:]]*//' || echo "0"
+    # Fallback to grep for specific version field
+    case "$tier" in
+      public)
+        grep -m1 '^[[:space:]]*version:' "$version_file" 2>/dev/null | sed 's/.*version:[[:space:]]*//' || echo "0"
+        ;;
+      team)
+        grep -m1 '^[[:space:]]*team_version:' "$version_file" 2>/dev/null | sed 's/.*team_version:[[:space:]]*//' || echo "0"
+        ;;
+      private)
+        grep -m1 '^[[:space:]]*private_version:' "$version_file" 2>/dev/null | sed 's/.*private_version:[[:space:]]*//' || echo "0"
+        ;;
+    esac
   fi
 }
 
 # Write version file
 write_version_file() {
   local version_file="$1"
-  local version="$2"
-  local cache_key="$3"
+  local public_version="$2"
+  local team_version="$3"
+  local private_version="$4"
+  local cache_key="$5"
   
   cat > "$version_file" <<EOF
 # Agentyard version tracking
 agentsmd:
-  version: $version
+  version: $public_version
+  team_version: $team_version
+  private_version: $private_version
   applied_at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   cache_key: "$cache_key"
 EOF
@@ -494,6 +636,7 @@ sync_rules() {
   local synced_rules=()
   local skipped_rules=()
   local new_rules=()
+  local overridden_rules=()
   
   log_verbose "Syncing rules to project..."
   
@@ -514,84 +657,129 @@ sync_rules() {
   local new_rules_content="# Agentyard rules tracking
 rules:"
   
-  # Find all .mdc files in rules directory
-  if [[ -d "$RULES_DIR" ]]; then
-    while IFS= read -r -d '' rule_file; do
-      local relative_path="${rule_file#$RULES_DIR/}"
-      local target_file="$target_dir/$relative_path"
-      local target_file_dir=$(dirname "$target_file")
-      local source_checksum=$(calculate_checksum "$rule_file")
-      
-      # Create subdirectory if needed
-      if [[ ! -d "$target_file_dir" ]] && [[ "$target_file_dir" != "$target_dir" ]]; then
-        if [[ "$CHECK_ONLY" == "false" ]]; then
-          mkdir -p "$target_file_dir"
-        fi
-      fi
-      
-      # Check if file exists and needs sync
-      local should_sync=true
-      local sync_reason=""
-      
-      if [[ -f "$target_file" ]]; then
-        local existing_entry=$(get_rule_entry "$rules_content" "$relative_path")
-        if [[ -n "$existing_entry" ]]; then
-          local tracked_checksum=$(echo "$existing_entry" | grep "checksum:" | sed 's/.*checksum: //' | tr -d '"')
-          local current_checksum=$(calculate_checksum "$target_file")
-          
-          if [[ "$tracked_checksum" != "$current_checksum" ]]; then
-            # Local modifications detected
-            should_sync=false
-            sync_reason="local modifications"
-            skipped_rules+=("$relative_path")
-          elif [[ "$tracked_checksum" != "$source_checksum" ]]; then
-            # Update available
-            sync_reason="update available"
-          else
-            # Already up to date
-            should_sync=false
-            sync_reason="already up to date"
+  # Collect all rules from all tiers with precedence
+  declare -A rule_sources  # Maps relative path to source file and tier
+  declare -A rule_tiers    # Maps relative path to tier name
+  
+  # Process repos in order (public, team, private)
+  for i in "${!AGENTSMD_REPOS[@]}"; do
+    local repo_root="${AGENTSMD_REPOS[$i]}"
+    local tier="${TIER_NAMES[$i]}"
+    local rules_dir="${repo_root}/rules"
+    
+    if [[ -d "$rules_dir" ]]; then
+      while IFS= read -r -d '' rule_file; do
+        local relative_path="${rule_file#$rules_dir/}"
+        
+        # Check if rule already exists from a lower-priority tier
+        if [[ -n "${rule_sources[$relative_path]:-}" ]]; then
+          # Rule exists - higher tier overrides
+          local prev_tier="${rule_tiers[$relative_path]}"
+          if [[ "$DRY_RUN" == "true" || "$VERBOSE" == "true" ]]; then
+            log_tier "$tier" "Override: $relative_path (was from $prev_tier)"
           fi
-        else
-          # File exists but not tracked - treat as local modification
+          overridden_rules+=("$relative_path: $prev_tier -> $tier")
+        fi
+        
+        # Store rule source (later tiers override earlier ones)
+        rule_sources["$relative_path"]="$rule_file"
+        rule_tiers["$relative_path"]="$tier"
+      done < <(find "$rules_dir" -name "*.mdc" -type f -print0 | sort -z)
+    fi
+  done
+  
+  # Now sync the collected rules
+  for relative_path in "${!rule_sources[@]}"; do
+    local rule_file="${rule_sources[$relative_path]}"
+    local tier="${rule_tiers[$relative_path]}"
+    local target_file="$target_dir/$relative_path"
+    local target_file_dir=$(dirname "$target_file")
+    local source_checksum=$(calculate_checksum "$rule_file")
+    
+    # Create subdirectory if needed
+    if [[ ! -d "$target_file_dir" ]] && [[ "$target_file_dir" != "$target_dir" ]]; then
+      if [[ "$CHECK_ONLY" == "false" ]]; then
+        mkdir -p "$target_file_dir"
+      fi
+    fi
+    
+    # Check if file exists and needs sync
+    local should_sync=true
+    local sync_reason=""
+    
+    if [[ -f "$target_file" ]]; then
+      local existing_entry=$(get_rule_entry "$rules_content" "$relative_path")
+      if [[ -n "$existing_entry" ]]; then
+        local tracked_checksum=$(echo "$existing_entry" | grep "checksum:" | sed 's/.*checksum: //' | tr -d '"')
+        local current_checksum=$(calculate_checksum "$target_file")
+        
+        if [[ "$tracked_checksum" != "$current_checksum" ]]; then
+          # Local modifications detected
           should_sync=false
-          sync_reason="untracked local file"
+          sync_reason="local modifications"
           skipped_rules+=("$relative_path")
+        elif [[ "$tracked_checksum" != "$source_checksum" ]]; then
+          # Update available
+          sync_reason="update available"
+        else
+          # Already up to date
+          should_sync=false
+          sync_reason="already up to date"
         fi
       else
-        sync_reason="new rule"
-        new_rules+=("$relative_path")
+        # File exists but not tracked - treat as local modification
+        should_sync=false
+        sync_reason="untracked local file"
+        skipped_rules+=("$relative_path")
       fi
-      
-      # Perform sync if needed
-      if [[ "$should_sync" == "true" ]]; then
-        if [[ "$CHECK_ONLY" == "true" ]]; then
-          log "Would sync: $relative_path ($sync_reason)"
+    else
+      sync_reason="new rule"
+      new_rules+=("$relative_path")
+    fi
+    
+    # Perform sync if needed
+    if [[ "$should_sync" == "true" ]]; then
+      if [[ "$CHECK_ONLY" == "true" || "$DRY_RUN" == "true" ]]; then
+        log "Would sync: $relative_path ($sync_reason) [${tier}]"
+      else
+        cp "$rule_file" "$target_file"
+        synced_rules+=("$relative_path")
+        if [[ "$VERBOSE" == "true" ]]; then
+          log_tier "$tier" "Synced: $relative_path ($sync_reason)"
         else
-          cp "$rule_file" "$target_file"
-          synced_rules+=("$relative_path")
           log_verbose "Synced: $relative_path ($sync_reason)"
         fi
+      fi
+    else
+      if [[ "$VERBOSE" == "true" ]]; then
+        log_tier "$tier" "Skipped: $relative_path ($sync_reason)"
       else
         log_verbose "Skipped: $relative_path ($sync_reason)"
       fi
-      
-      # Add to tracking content
-      new_rules_content+="
+    fi
+    
+    # Add to tracking content
+    new_rules_content+="
 - path: $relative_path
   checksum: $source_checksum
+  source_tier: $tier
   synced_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      
-    done < <(find "$RULES_DIR" -name "*.mdc" -type f -print0 | sort -z)
-  fi
+  done
   
   # Write updated rules tracking file
-  if [[ "$CHECK_ONLY" == "false" ]] && [[ ${#synced_rules[@]} -gt 0 || ${#new_rules[@]} -gt 0 ]]; then
+  if [[ "$CHECK_ONLY" == "false" && "$DRY_RUN" == "false" ]] && [[ ${#synced_rules[@]} -gt 0 || ${#new_rules[@]} -gt 0 ]]; then
     write_rules_file "$rules_file" "$new_rules_content"
     log_verbose "Updated rules tracking file"
   fi
   
   # Report results
+  if [[ ${#overridden_rules[@]} -gt 0 && ( "$DRY_RUN" == "true" || "$VERBOSE" == "true" ) ]]; then
+    log "Rule overrides detected:"
+    for override in "${overridden_rules[@]}"; do
+      log "  - $override"
+    done
+  fi
+  
   if [[ ${#new_rules[@]} -gt 0 ]]; then
     log "Found ${#new_rules[@]} new rule(s)"
   fi
@@ -840,6 +1028,12 @@ main() {
     exit 0
   fi
   
+  # Handle list rules
+  if [[ "$LIST_RULES" == "true" ]]; then
+    list_rules
+    exit 0
+  fi
+  
   # Ensure directories exist
   ensure_directories
   
@@ -860,50 +1054,67 @@ main() {
   create_symlink "AGENTS.md" "$claude_file"
   create_symlink "AGENTS.md" "$gemini_file"
   
-  # Read current version
-  local current_version=$(read_version_file "$version_file")
-  log_verbose "Current version: $current_version"
+  # Read current versions for all tiers
+  local public_version=$(read_version_file "$version_file" "public")
+  local team_version=$(read_version_file "$version_file" "team")
+  local private_version=$(read_version_file "$version_file" "private")
   
-  # Get available migrations
-  local migrations=()
-  if [[ -d "$BEST_PRACTICES_DIR" ]]; then
-    while IFS= read -r -d '' file; do
-      migrations+=("$file")
-    done < <(find "$BEST_PRACTICES_DIR" -name "*.md" -type f -print0 | sort -z)
+  if [[ "$VERBOSE" == "true" ]]; then
+    log_verbose "Current versions - public: $public_version, team: $team_version, private: $private_version"
   fi
   
-  if [[ ${#migrations[@]} -eq 0 ]]; then
-    log_warning "No migration files found in $BEST_PRACTICES_DIR"
-    exit 0
-  fi
+  # Collect all migrations from all tiers
+  local all_migrations=()
+  local migration_tiers=()
+  local tier_versions=()
+  tier_versions[0]=$public_version
+  tier_versions[1]=$team_version
+  tier_versions[2]=$private_version
   
-  # Determine which migrations to apply
-  local migrations_to_apply=()
-  for migration in "${migrations[@]}"; do
-    local migration_number=$(basename "$migration" | grep -o '^[0-9]\+' || echo "0")
-    if [[ $migration_number -gt $current_version ]]; then
-      migrations_to_apply+=("$migration")
+  # Process each repository
+  for i in "${!AGENTSMD_REPOS[@]}"; do
+    local repo_root="${AGENTSMD_REPOS[$i]}"
+    local tier="${TIER_NAMES[$i]}"
+    local practices_dir="${repo_root}/best-practices"
+    local current_tier_version="${tier_versions[$i]}"
+    
+    if [[ -d "$practices_dir" ]]; then
+      while IFS= read -r -d '' file; do
+        local migration_number=$(basename "$file" | grep -o '^[0-9]\+' || echo "0")
+        if [[ $migration_number -gt $current_tier_version ]]; then
+          all_migrations+=("$file")
+          migration_tiers+=("$tier")
+        fi
+      done < <(find "$practices_dir" -name "*.md" -type f -print0 | sort -z)
     fi
   done
   
-  if [[ ${#migrations_to_apply[@]} -eq 0 ]]; then
-    log "No new migrations to apply (current version: $current_version)"
+  if [[ ${#all_migrations[@]} -eq 0 ]]; then
+    log "No new migrations to apply"
     # Still sync rules even if no new migrations
     sync_rules "$project_path" > /dev/null
     exit 0
   fi
   
-  log "Found ${#migrations_to_apply[@]} new migration(s) to apply"
+  log "Found ${#all_migrations[@]} new migration(s) to apply"
   
   # Check only mode
-  if [[ "$CHECK_ONLY" == "true" ]]; then
+  if [[ "$CHECK_ONLY" == "true" || "$DRY_RUN" == "true" ]]; then
     log "Migrations that would be applied:"
-    for migration in "${migrations_to_apply[@]}"; do
-      echo "  - $(basename "$migration")"
+    for idx in "${!all_migrations[@]}"; do
+      local migration="${all_migrations[$idx]}"
+      local tier="${migration_tiers[$idx]}"
+      if [[ "$VERBOSE" == "true" ]]; then
+        echo "  - $(basename "$migration") [${tier}]"
+      else
+        echo "  - $(basename "$migration")"
+      fi
     done
     # Also check rules
     sync_rules "$project_path" > /dev/null
-    exit 0
+    if [[ "$DRY_RUN" == "true" ]]; then
+      exit 0
+    fi
   fi
   
   # Apply migrations
@@ -912,8 +1123,20 @@ main() {
     agents_content=$(cat "$agents_file")
   fi
   
-  for migration in "${migrations_to_apply[@]}"; do
-    log "Applying migration: $(basename "$migration")"
+  # Track highest version for each tier
+  local max_public_version=$public_version
+  local max_team_version=$team_version
+  local max_private_version=$private_version
+  
+  for idx in "${!all_migrations[@]}"; do
+    local migration="${all_migrations[$idx]}"
+    local tier="${migration_tiers[$idx]}"
+    
+    if [[ "$VERBOSE" == "true" ]]; then
+      log_tier "$tier" "Applying migration: $(basename "$migration")"
+    else
+      log "Applying migration: $(basename "$migration")"
+    fi
     
     # Process the migration
     local processed
@@ -929,9 +1152,25 @@ main() {
     fi
     agents_content+="$processed"
     
-    # Update version
+    # Update max version for the appropriate tier
     local migration_number=$(basename "$migration" | grep -o '^[0-9]\+' || echo "0")
-    current_version=$migration_number
+    case "$tier" in
+      public)
+        if [[ $migration_number -gt $max_public_version ]]; then
+          max_public_version=$migration_number
+        fi
+        ;;
+      team)
+        if [[ $migration_number -gt $max_team_version ]]; then
+          max_team_version=$migration_number
+        fi
+        ;;
+      private)
+        if [[ $migration_number -gt $max_private_version ]]; then
+          max_private_version=$migration_number
+        fi
+        ;;
+    esac
   done
   
   # Sync rules
@@ -960,10 +1199,15 @@ main() {
   echo -e "$agents_content" > "$agents_file"
   log_success "Updated $agents_file"
   
-  # Update version file
+  # Update version file with all tier versions
   local cache_key=$(generate_cache_key "version" "$project_path")
-  write_version_file "$version_file" "$current_version" "$cache_key"
-  log_success "Updated version to $current_version"
+  write_version_file "$version_file" "$max_public_version" "$max_team_version" "$max_private_version" "$cache_key"
+  
+  if [[ "$VERBOSE" == "true" ]]; then
+    log_success "Updated versions - public: $max_public_version, team: $max_team_version, private: $max_private_version"
+  else
+    log_success "Updated version tracking"
+  fi
   
   log_success "Done! AGENTS.md is now up to date."
 }
