@@ -356,14 +356,32 @@ process_migration() {
   local processed_content=""
   local remaining_content="$content"
   
-  # Process all Claude prompts in the migration
-  while [[ "$remaining_content" =~ \{\{CLAUDE_PROMPT\}\}([^\{]*)\{\{/CLAUDE_PROMPT\}\} ]]; do
-    local before_match="${remaining_content%%{{CLAUDE_PROMPT}}*}"
-    local full_match="${BASH_REMATCH[0]}"
-    local prompt="${BASH_REMATCH[1]}"
+  # Process all Claude prompts in the migration using a more robust approach
+  while true; do
+    # Find the start of the next Claude prompt
+    local start_marker="{{CLAUDE_PROMPT}}"
+    local end_marker="{{/CLAUDE_PROMPT}}"
     
-    # Add content before the match (which doesn't include the {{CLAUDE_PROMPT}} marker)
+    # Check if there's a Claude prompt in the remaining content
+    if [[ "$remaining_content" != *"$start_marker"* ]]; then
+      break
+    fi
+    
+    # Extract content before the start marker
+    local before_match="${remaining_content%%$start_marker*}"
     processed_content+="$before_match"
+    
+    # Remove the processed part and the start marker
+    remaining_content="${remaining_content#*$start_marker}"
+    
+    # Find the end marker
+    if [[ "$remaining_content" != *"$end_marker"* ]]; then
+      log_error "Found $start_marker without matching $end_marker in migration: $migration_name"
+      return 1
+    fi
+    
+    # Extract the prompt content
+    local prompt="${remaining_content%%$end_marker*}"
     
     # Trim whitespace from prompt
     prompt=$(echo "$prompt" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
@@ -383,8 +401,8 @@ process_migration() {
     # Add the result (without the prompt markers or the prompt itself)
     processed_content+="$result"
     
-    # Update remaining content to start after the closing marker
-    remaining_content="${remaining_content#*{{/CLAUDE_PROMPT}}}"
+    # Update remaining content to start after the end marker
+    remaining_content="${remaining_content#*$end_marker}"
   done
   
   # Add any remaining content
@@ -443,6 +461,163 @@ create_symlink() {
       log_success "Created symlink: $target -> $source"
     fi
   fi
+}
+
+# Wrap lines in markdown content while preserving formatting
+wrap_markdown_content() {
+  local content="$1"
+  local max_width=120
+  
+  # Check if fmt is available
+  if ! command_exists fmt; then
+    log_warning "fmt command not found. Skipping line wrapping."
+    echo "$content"
+    return 0
+  fi
+  
+  # Create temporary files for processing
+  local temp_input=$(mktemp)
+  local temp_output=$(mktemp)
+  local temp_code=$(mktemp)
+  
+  # Write content to temp file
+  echo "$content" > "$temp_input"
+  
+  # Track if we're in a code block
+  local in_code_block=false
+  local code_block_delimiter=""
+  local line_num=0
+  
+  # Process line by line
+  while IFS= read -r line; do
+    line_num=$((line_num + 1))
+    
+    # Check for code block markers
+    if [[ "$line" =~ ^(\`{3,}|\~{3,}) ]]; then
+      if [[ "$in_code_block" == "false" ]]; then
+        in_code_block=true
+        code_block_delimiter="${BASH_REMATCH[1]}"
+        echo "$line" >> "$temp_output"
+        continue
+      elif [[ "$line" =~ ^${code_block_delimiter} ]]; then
+        in_code_block=false
+        code_block_delimiter=""
+        echo "$line" >> "$temp_output"
+        continue
+      fi
+    fi
+    
+    # If in code block, preserve as-is
+    if [[ "$in_code_block" == "true" ]]; then
+      echo "$line" >> "$temp_output"
+      continue
+    fi
+    
+    # Handle special markdown elements
+    # Headers (preserve as-is)
+    if [[ "$line" =~ ^#+ ]]; then
+      echo "$line" >> "$temp_output"
+      continue
+    fi
+    
+    # Empty lines (preserve)
+    if [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]]; then
+      echo "$line" >> "$temp_output"
+      continue
+    fi
+    
+    # Lists - handle specially to preserve indentation
+    if [[ "$line" =~ ^([[:space:]]*)([*+-]|[0-9]+\.)([[:space:]]+)(.*)$ ]]; then
+      local indent="${BASH_REMATCH[1]}"
+      local marker="${BASH_REMATCH[2]}"
+      local space="${BASH_REMATCH[3]}"
+      local content="${BASH_REMATCH[4]}"
+      
+      # Check if content is empty or just whitespace
+      if [[ -z "$content" || "$content" =~ ^[[:space:]]*$ ]]; then
+        echo "$line" >> "$temp_output"
+        continue
+      fi
+      
+      # Check if content contains a URL
+      if [[ "$content" =~ https?://[^[:space:]]+ ]]; then
+        echo "$line" >> "$temp_output"
+      else
+        # Calculate available width for content
+        local prefix_len=$((${#indent} + ${#marker} + ${#space}))
+        local content_width=$((max_width - prefix_len))
+        
+        # Ensure we have a positive width
+        if [[ $content_width -lt 20 ]]; then
+          # Line is already too indented, just preserve it
+          echo "$line" >> "$temp_output"
+        else
+          # Wrap the content part only
+          local wrapped_content=$(echo "$content" | fmt -w $content_width)
+          local first_line=true
+          while IFS= read -r wrapped_line; do
+            if [[ "$first_line" == "true" ]]; then
+              echo "${indent}${marker}${space}${wrapped_line}" >> "$temp_output"
+              first_line=false
+            else
+              # Continuation lines get extra indentation
+              echo "${indent}    ${wrapped_line}" >> "$temp_output"
+            fi
+          done <<< "$wrapped_content"
+        fi
+      fi
+      continue
+    fi
+    
+    # Block quotes
+    if [[ "$line" =~ ^(\>+[[:space:]]*)(.*)$ ]]; then
+      local quote_marker="${BASH_REMATCH[1]}"
+      local content="${BASH_REMATCH[2]}"
+      
+      # Check if content is empty
+      if [[ -z "$content" || "$content" =~ ^[[:space:]]*$ ]]; then
+        echo "$line" >> "$temp_output"
+        continue
+      fi
+      
+      # Check if content contains a URL
+      if [[ "$content" =~ https?://[^[:space:]]+ ]]; then
+        echo "$line" >> "$temp_output"
+      else
+        # Calculate available width
+        local quote_width=$((max_width - ${#quote_marker}))
+        if [[ $quote_width -lt 20 ]]; then
+          # Too narrow, preserve as-is
+          echo "$line" >> "$temp_output"
+        else
+          # Wrap the content part only
+          local wrapped_content=$(echo "$content" | fmt -w $quote_width)
+          while IFS= read -r wrapped_line; do
+            echo "${quote_marker}${wrapped_line}" >> "$temp_output"
+          done <<< "$wrapped_content"
+        fi
+      fi
+      continue
+    fi
+    
+    # Regular paragraphs - check for URLs
+    if [[ "$line" =~ https?://[^[:space:]]+ ]]; then
+      # Line contains URL, preserve as-is
+      echo "$line" >> "$temp_output"
+    else
+      # Wrap normal text
+      echo "$line" | fmt -w $max_width >> "$temp_output"
+    fi
+    
+  done < "$temp_input"
+  
+  # Read the wrapped content
+  local wrapped_content=$(cat "$temp_output")
+  
+  # Clean up temp files
+  rm -f "$temp_input" "$temp_output" "$temp_code"
+  
+  echo "$wrapped_content"
 }
 
 # Run dedupe command
@@ -575,6 +750,16 @@ main() {
     local migration_number=$(basename "$migration" | grep -o '^[0-9]\+' || echo "0")
     current_version=$migration_number
   done
+  
+  # Wrap lines before writing
+  log_verbose "Wrapping lines to 120 characters..."
+  local wrapped_content
+  if wrapped_content=$(wrap_markdown_content "$agents_content"); then
+    agents_content="$wrapped_content"
+    log_verbose "Line wrapping completed successfully"
+  else
+    log_warning "Line wrapping failed, using unwrapped content"
+  fi
   
   # Write AGENTS.md
   echo -e "$agents_content" > "$agents_file"
