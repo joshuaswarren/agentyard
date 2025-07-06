@@ -30,6 +30,8 @@ export OPENAI_API_KEY="your-api-key-here"  # Required for mentor command
 Add the lines above to ~/.zshrc (or ~/.bashrc), source the file, and you’re ready:
 
 starttask yourproject feature/new-feature   # create disposable worktree & session with Claude Code
+starttask yourproject bugfix/issue -p 123   # create session and send /plan command for issue #123
+starttask yourproject feature/auth --implement 456  # create session and implement issue #456
 jump-yourproject                            # fuzzy‑select a session
 finishtask                                  # clean up worktree when done (run inside session)
 cleanup-worktrees                           # weekly cleanup of merged worktrees
@@ -48,6 +50,11 @@ mentor                                      # AI-powered code review of recent c
 - **Auto-launch**: `starttask` now automatically launches Claude Code in the tmux session
 - **Auto-install**: If Claude Code isn't installed, it will be installed automatically via npm
 - **Fallback**: If Claude Code fails to launch, the session falls back to a regular shell
+- **Direct Command Flags**: New `--plan`/`-p` and `--implement`/`-i` flags for immediate task execution:
+  - `starttask project branch -p 123` - Launches Claude and sends `/plan GitHub issue 123`
+  - `starttask project branch --implement 456 "prioritize performance"` - Sends `/implement-gh-issue 456 prioritize performance`
+  - Flags can include optional issue numbers and additional message text
+  - Commands are sent automatically 3 seconds after session attachment
 
 ### Session Logging
 - All tmux session output is automatically logged to `~/logs/<project>/<session>-<branch>.log`
