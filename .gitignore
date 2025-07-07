@@ -4,4 +4,5 @@ lib/judge/__pycache__
 state/active_tasks.txt
 state/active-tasks.txt
 agentsmd/cache
+backups/
 
