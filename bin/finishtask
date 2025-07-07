@@ -28,7 +28,7 @@ fi
 session_name=$(tmux display-message -p '#S')
 
 # ---- Validate session name format -------------------------------------------
-if [[ ! "$session_name" =~ ^[^-]+-[0-9]+$ ]]; then
+if [[ ! "$session_name" =~ ^[^-]+(-[^-]+)*-[0-9]+$ ]]; then
   echo "Error: Current session '$session_name' doesn't match expected format (project-slug)" >&2
   echo "This command only works with sessions created by starttask" >&2
   exit 1
